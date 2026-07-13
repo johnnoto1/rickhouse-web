@@ -23,7 +23,7 @@ export default function TradeCalculator() {
     supabase
       .from("bottle_ratings")
       .select(
-        "rating, bottles!inner(id, name, distillery, msrp_usd, secondary_value, secondary_source, secondary_updated_at, status)"
+        "rating, rounds_played, bottles!inner(id, name, distillery, msrp_usd, secondary_value, secondary_source, secondary_updated_at, status)"
       )
       .order("rating", { ascending: false })
       .then(({ data }) => {
@@ -34,11 +34,17 @@ export default function TradeCalculator() {
               ...row.bottles,
               elo: row.rating ?? 1500,
               msrp: row.bottles.msrp_usd ?? null,
+              rounds_played: row.rounds_played ?? 0,
             }))
         );
         setLoading(false);
       });
   }, []);
+
+  const anyGraduated = useMemo(
+    () => catalog.some((b) => (b.rounds_played ?? 0) >= 10),
+    [catalog]
+  );
 
   // ★ Top-quartile ELO/price threshold — recomputed after load.
   // Uses each bottle's effectivePrice so secondary values shift the cutoff.
@@ -323,6 +329,9 @@ export default function TradeCalculator() {
                           </div>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-stone-700">
                             <span className="font-semibold">{b.elo} ELO</span>
+                            {anyGraduated && b.rounds_played < 10 && (
+                              <span className="italic" style={{ color: "#B08040" }}>provisional</span>
+                            )}
                             {hasPrice && (
                               <>
                                 <span>

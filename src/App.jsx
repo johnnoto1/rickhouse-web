@@ -270,7 +270,6 @@ function Leaderboard() {
     supabase
       .from("bottle_ratings")
       .select("rating, wins, losses, rounds_played, bottles(name, distillery)")
-      .gt("rounds_played", 0)
       .order("rating", { ascending: false })
       .limit(200)
       .then(({ data }) => setRows(data ?? []));
@@ -292,6 +291,7 @@ function MyBoard({ userId }) {
 }
 
 function Board({ title, rows, empty }) {
+  const anyGraduated = rows?.some((r) => (r.rounds_played ?? 0) >= 10) ?? false;
   return (
     <main style={S.main}>
       <div style={S.panel}>
@@ -302,17 +302,31 @@ function Board({ title, rows, empty }) {
             {empty ?? "No rated bottles yet."}
           </p>
         )}
-        {rows?.map((r, i) => (
-          <div key={i} className="row">
-            <span style={S.rowRank}>{i + 1}</span>
-            <span style={S.rowName}>
-              {r.bottles?.name}
-              <span style={S.rowDist}> {r.bottles?.distillery}</span>
-            </span>
-            <span style={S.rowRecord}>{r.wins}–{r.losses}</span>
-            <span style={S.rowRating}>{Math.round(r.rating)}</span>
+        {rows?.length > 0 && (
+          <div style={S.colHeaderRow}>
+            <span style={S.colHdrRank}>#</span>
+            <span style={S.colHdrName}>BOTTLE</span>
+            <span style={S.colHdrRecord}>W–L</span>
+            <span style={S.colHdrRating}>RATING</span>
           </div>
-        ))}
+        )}
+        {rows?.map((r, i) => {
+          const provisional = anyGraduated && (r.rounds_played ?? 0) < 10;
+          return (
+            <div key={i} className="row">
+              <span style={S.rowRank}>{i + 1}</span>
+              <span style={S.rowName}>
+                {r.bottles?.name}
+                <span style={S.rowDist}> {r.bottles?.distillery}</span>
+              </span>
+              <span style={S.rowRecord}>{r.wins}–{r.losses}</span>
+              <span style={S.rowRating}>{Math.round(r.rating)}</span>
+              {provisional && (
+                <span style={S.rowRoundsProvisional}>provisional</span>
+              )}
+            </div>
+          );
+        })}
       </div>
     </main>
   );
@@ -397,6 +411,17 @@ const S = {
   rowDist: { fontWeight: 400, fontSize: 11, color: "#7A5A2E", marginLeft: 6 },
   rowRecord: { width: 70, textAlign: "right", fontSize: 12, color: "#7A5A2E" },
   rowRating: { width: 64, textAlign: "right", fontWeight: 700 },
+  rowRoundsProvisional: { fontSize: 11, color: "#B08040", fontStyle: "italic" },
+  colHeaderRow: {
+    display: "flex", alignItems: "baseline", gap: 10,
+    padding: "7px 18px", borderBottom: "1px solid rgba(42,27,12,0.2)",
+    fontSize: 9, letterSpacing: "0.2em", color: "#7A5A2E", fontWeight: 700,
+    textTransform: "uppercase",
+  },
+  colHdrRank: { width: 34 },
+  colHdrName: { flex: 1 },
+  colHdrRecord: { width: 70, textAlign: "right" },
+  colHdrRating: { width: 64, textAlign: "right" },
   footer: { textAlign: "center", padding: "18px 10px 24px", fontSize: 10, letterSpacing: "0.35em", color: "#7A5A2E" },
 };
 
