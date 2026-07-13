@@ -1,13 +1,7 @@
-// src/App.jsx — The Rickhouse, wired to Supabase.
-// Differences from the local prototype:
-//   • magic-link auth (no passwords)
-//   • trios come from the /deal edge function (server chooses)
-//   • judgments go to /resolve (server validates + updates ELO)
-//   • leaderboard reads the world-readable bottle_ratings table
-//   • "My Board" reads your personal user_bottle_ratings
-
 import { useState, useEffect } from "react";
+import { Routes, Route, Link } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
+import TradeCalculator from "./TradeCalculator";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -16,6 +10,16 @@ const ROLES = [
 ];
 
 export default function App() {
+  return (
+    <Routes>
+      <Route path="/trade" element={<TradeCalculator />} />
+      <Route path="/*" element={<RickhouseApp />} />
+    </Routes>
+  );
+}
+
+// ---------------- Root app (auth-gated) ----------------
+function RickhouseApp() {
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(false);
 
@@ -86,9 +90,9 @@ function SignIn() {
 // ---------------- Game ----------------
 function Game({ session }) {
   const [view, setView] = useState("rank");
-  const [deal, setDeal] = useState(null); // { deal_id, bottles }
+  const [deal, setDeal] = useState(null);
   const [picks, setPicks] = useState({});
-  const [result, setResult] = useState(null); // { deltas }
+  const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -138,7 +142,6 @@ function Game({ session }) {
     });
   };
 
-  // submit when all three roles assigned
   useEffect(() => {
     const ids = Object.keys(picks);
     if (ids.length !== 3 || !deal || result || busy) return;
@@ -182,6 +185,7 @@ function Game({ session }) {
             {label}
           </button>
         ))}
+        <Link to="/trade" className="tab">Trade</Link>
         <button className="tab" onClick={() => supabase.auth.signOut()}>
           Sign out
         </button>
@@ -325,6 +329,9 @@ function Shell({ children }) {
           <span style={S.brandMain}>RICKHOUSE</span>
           <span style={S.brandSub}>KEEP · TRADE · CUT</span>
         </div>
+        <nav style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
+          <Link to="/trade" className="tab">Trade Calculator</Link>
+        </nav>
       </header>
       <div style={{ display: "flex", flexDirection: "column", flex: 1, alignItems: "center" }}>
         {children}
@@ -394,7 +401,7 @@ const S = {
 };
 
 const CSS = `
-.tab { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 8px 20px; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.25em; cursor: pointer; transition: all .15s; }
+.tab { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 8px 20px; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.25em; cursor: pointer; transition: all .15s; text-decoration: none; display: inline-block; }
 .tab:hover { border-color: #B08040; color: #E8B45A; }
 .tabOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; font-weight: 700; }
 .tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
@@ -411,7 +418,7 @@ const CSS = `
 .roleBtn-cut.roleOn   { background: #A03325; border-color: #A03325; color: #F1E6CE; opacity: 1; }
 .pourBtn { background: #E8B45A; color: #2A1B0C; border: none; padding: 12px 34px; font-family: Georgia, serif; font-size: 13px; letter-spacing: 0.3em; font-weight: 700; cursor: pointer; transition: transform .12s; }
 .pourBtn:hover { transform: translateY(-2px); }
-.row { display: flex; align-items: baseline; gap: 10px; padding: 10px 18px; border-bottom: 1px solid rgba(42,27,12,0.15); font-size: 14px; }
+.row { display: flex; align-items: baseline; gap: 10px; padding: 10px 18px; border-bottom: 1px solid rgba(42,27,12,0.15); font-size: 14px; text-align: left; }
 .row:nth-child(odd) { background: rgba(42,27,12,0.03); }
 .field { padding: 9px 12px; font-family: Georgia, serif; font-size: 13px; background: #FFF9EC; border: 1px solid #8A6A3A; color: #2A1B0C; }
 .delta { font-size: 14px; font-weight: 700; animation: pop .3s ease; }
