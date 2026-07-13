@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
-import { Routes, Route, Link } from "react-router-dom";
+import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
 import Collection from "./Collection";
+import Landing from "./Landing";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -13,12 +14,19 @@ const ROLES = [
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<Landing />} />
       <Route path="/trade" element={<TradeCalculator />} />
       <Route path="/collection" element={<Collection />} />
       <Route path="/*" element={<RickhouseApp />} />
     </Routes>
   );
 }
+
+// URL <-> internal tab-view mapping. Kept as a plain lookup rather than
+// separate <Route> entries so switching tabs never remounts Game (which
+// would re-bootstrap the anon session and refetch the current deal).
+const PATH_VIEW = { "/rank": "rank", "/leaderboard": "board", "/board": "mine" };
+const VIEW_PATH = { rank: "/rank", board: "/leaderboard", mine: "/board" };
 
 // ---------------- Root app ----------------
 function RickhouseApp() {
@@ -50,7 +58,16 @@ function RickhouseApp() {
 
 // ---------------- Game ----------------
 function Game({ session }) {
-  const [view, setView] = useState("rank");
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Seeded once from the URL on mount so deep links (/rank, /leaderboard,
+  // /board) land on the right tab; subsequent tab clicks just update local
+  // state + the URL, without remounting this component.
+  const [view, setView] = useState(() => PATH_VIEW[location.pathname] ?? "rank");
+  const goView = (key) => {
+    setView(key);
+    navigate(VIEW_PATH[key]);
+  };
   const [deal, setDeal] = useState(null);
   const [picks, setPicks] = useState({});
   const [result, setResult] = useState(null);
@@ -143,7 +160,7 @@ function Game({ session }) {
           <button
             key={k}
             className={"tab" + (view === k ? " tabOn" : "")}
-            onClick={() => setView(k)}
+            onClick={() => goView(k)}
           >
             {label}
           </button>
@@ -232,7 +249,7 @@ function Game({ session }) {
 
       {view === "board" && <Leaderboard />}
       {view === "mine" && <MyBoard userId={session.user.id} />}
-      {view === "upgrade" && <AddEmail onDone={() => setView("rank")} />}
+      {view === "upgrade" && <AddEmail onDone={() => goView("rank")} />}
     </>
   );
 }
