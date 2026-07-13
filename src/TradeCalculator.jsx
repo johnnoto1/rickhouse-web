@@ -189,12 +189,18 @@ export default function TradeCalculator() {
       <div className="max-w-3xl mx-auto">
 
         {/* Back link */}
-        <div className="mb-5">
+        <div className="mb-5 flex items-center justify-between">
           <Link
             to="/"
             className="text-amber-700 hover:text-amber-400 text-xs uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
           >
             ← Keep · Trade · Cut
+          </Link>
+          <Link
+            to="/collection"
+            className="text-amber-700 hover:text-amber-400 text-xs uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+          >
+            Collection
           </Link>
         </div>
 

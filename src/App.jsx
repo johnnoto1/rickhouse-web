@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Routes, Route, Link } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
+import Collection from "./Collection";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -13,6 +14,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/trade" element={<TradeCalculator />} />
+      <Route path="/collection" element={<Collection />} />
       <Route path="/*" element={<RickhouseApp />} />
     </Routes>
   );
@@ -147,6 +149,7 @@ function Game({ session }) {
           </button>
         ))}
         <Link to="/trade" className="tab">Trade</Link>
+        <Link to="/collection" className="tab">Collection</Link>
         {isAnon ? (
           <button
             className={"tab" + (view === "upgrade" ? " tabOn" : "")}
@@ -331,7 +334,7 @@ function AddEmail({ onDone }) {
             {path === "create" ? (
               <p style={{ marginTop: 0, fontSize: 14 }}>
                 Add an email to keep your board across devices. Your existing
-                rounds stay with you.
+                rounds stay with you — keeps your votes and your collection.
               </p>
             ) : (
               <p style={{ marginTop: 0, fontSize: 14 }}>
@@ -453,8 +456,9 @@ function Shell({ children }) {
           <span style={S.brandMain}>RICKHOUSE</span>
           <span style={S.brandSub}>KEEP · TRADE · CUT</span>
         </div>
-        <nav style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
+        <nav style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 14 }}>
           <Link to="/trade" className="tab">Trade Calculator</Link>
+          <Link to="/collection" className="tab">Collection</Link>
         </nav>
       </header>
       <div style={{ display: "flex", flexDirection: "column", flex: 1, alignItems: "center" }}>
