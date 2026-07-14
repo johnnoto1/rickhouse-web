@@ -73,6 +73,8 @@ function Game({ session }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [swapsRemaining, setSwapsRemaining] = useState(2);
+  const [swappingSlot, setSwappingSlot] = useState(null);
 
   const isAnon = session?.user?.is_anonymous === true;
 
@@ -95,12 +97,42 @@ function Game({ session }) {
     setBusy(true);
     setPicks({});
     setResult(null);
+    setSwapsRemaining(2);
     try {
       setDeal(await authedFetch("deal"));
     } catch (e) {
       setErr(e.message);
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Swap out a bottle you don't recognize — server picks the replacement.
+  // Allowed any time before resolve; clears that slot's pick, if any,
+  // since the bottle it referred to no longer exists in this deal.
+  const doSwap = async (idx) => {
+    if (!deal || result || busy || swappingSlot !== null) return;
+    const outgoing = deal.bottles[idx];
+    setSwappingSlot(idx);
+    setErr("");
+    try {
+      const res = await authedFetch("swap", { deal_id: deal.deal_id, slot: idx });
+      setDeal((prev) => {
+        const bottles = [...prev.bottles];
+        bottles[idx] = res.replacement;
+        return { ...prev, bottles };
+      });
+      setSwapsRemaining(res.swaps_remaining);
+      setPicks((prev) => {
+        if (!(outgoing.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[outgoing.id];
+        return next;
+      });
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSwappingSlot(null);
     }
   };
 
@@ -185,12 +217,31 @@ function Game({ session }) {
         <main style={S.main}>
           {err && <p style={{ ...S.hint, color: "#E8B45A" }}>{err}</p>}
           <div style={S.cardRow}>
-            {(deal?.bottles ?? []).map((b) => {
+            {(deal?.bottles ?? []).map((b, idx) => {
               const role = picks[b.id];
               const d = result?.deltas?.[b.id];
               return (
-                <div key={b.id} className={"label" + (role ? " label-" + role : "")}>
-                  <div style={S.labelBorder}>
+                <div
+                  key={idx}
+                  className={"label" + (role ? " label-" + role : "")}
+                  style={{ position: "relative" }}
+                >
+                  {!result && (
+                    <button
+                      className="swapX"
+                      disabled={swapsRemaining <= 0 || swappingSlot !== null}
+                      onClick={() => doSwap(idx)}
+                      aria-label={`Swap out ${b.name}`}
+                      title={
+                        swapsRemaining <= 0
+                          ? "No swaps remaining"
+                          : "Don't know this one? Swap it out"
+                      }
+                    >
+                      {swappingSlot === idx ? "…" : "×"}
+                    </button>
+                  )}
+                  <div key={b.id} className="swapIn" style={S.labelBorder}>
                     <div style={S.labelDistillery}>{b.distillery}</div>
                     <div style={S.labelName}>{b.name}</div>
                     <div style={S.labelMeta}>
@@ -231,6 +282,11 @@ function Game({ session }) {
               );
             })}
           </div>
+          {!result && deal && (
+            <div style={S.swapCounter}>
+              {swapsRemaining} SWAP{swapsRemaining === 1 ? "" : "S"} LEFT
+            </div>
+          )}
           <div style={S.underRow}>
             {result ? (
               <button className="pourBtn" onClick={newDeal}>
@@ -526,6 +582,7 @@ const S = {
   ratingNum: { fontSize: 30, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E" },
   btnRow: { display: "flex", gap: 6, marginTop: "auto" },
+  swapCounter: { textAlign: "center", fontSize: 11, letterSpacing: "0.2em", color: "#7A5A2E", marginTop: 14 },
   underRow: { display: "flex", justifyContent: "center", marginTop: 24, minHeight: 48, alignItems: "center" },
   hint: { fontSize: 13, color: "#C9A96E", fontStyle: "italic", textAlign: "center" },
   panel: {
@@ -579,5 +636,11 @@ const CSS = `
 .field { padding: 9px 12px; font-family: Georgia, serif; font-size: 13px; background: #FFF9EC; border: 1px solid #8A6A3A; color: #2A1B0C; }
 .delta { font-size: 14px; font-weight: 700; animation: pop .3s ease; }
 @keyframes pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .label, .pourBtn, .tab, .roleBtn { transition: none; } .delta { animation: none; } }
+.swapX { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid #8A6A3A; background: #F1E6CE; color: #7A5A2E; font-size: 13px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .12s; z-index: 2; }
+.swapX:hover:not(:disabled) { border-color: #A03325; color: #A03325; }
+.swapX:disabled { opacity: .35; cursor: default; }
+.swapX:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+.swapIn { animation: swapIn .3s ease; }
+@keyframes swapIn { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .label, .pourBtn, .tab, .roleBtn, .swapX { transition: none; } .delta, .swapIn { animation: none; } }
 `;
