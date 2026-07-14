@@ -38,13 +38,19 @@ const VIEW_PATH = { rank: "/rank", board: "/leaderboard", mine: "/board" };
 function RickhouseApp() {
   const [session, setSession] = useState(null);
   const [ready, setReady] = useState(false);
+  // StrictMode double-invokes this effect in dev; both getSession() calls can
+  // resolve with no session before either signInAnonymously() completes,
+  // creating two anon sessions. The ref makes the sign-in itself idempotent
+  // without skipping the auth-state subscription on the second invocation.
+  const bootstrapping = useRef(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       if (data.session) {
         setSession(data.session);
         setReady(true);
-      } else {
+      } else if (!bootstrapping.current) {
+        bootstrapping.current = true;
         // First visit — sign in anonymously so the user can vote immediately.
         const { data: { session: anon } } = await supabase.auth.signInAnonymously();
         setSession(anon);
