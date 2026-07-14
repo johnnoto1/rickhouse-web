@@ -88,6 +88,12 @@ function Game({ session }) {
   const [swapsRemaining, setSwapsRemaining] = useState(2);
   const [swappingSlot, setSwappingSlot] = useState(null);
   const [batchMode, setBatchMode] = useState(false);
+  // Guards against out-of-order /deal responses: if a second newDeal() call
+  // starts before an earlier one's response lands, only the LAST call's
+  // result may ever reach setDeal — otherwise a slow toggle-off response
+  // arriving after a fast toggle-on response would silently overwrite it,
+  // leaving the cards on screen out of sync with the toggle.
+  const dealRequestId = useRef(0);
   // In-memory only (not localStorage) — resets on reload, matches the task's
   // "persists for the session" spec. Explainer shows on the first ever
   // enable in this session and never again, even after toggling off/on.
@@ -114,17 +120,19 @@ function Game({ session }) {
   // NEW value explicitly since setBatchMode hasn't re-rendered yet when it
   // also calls newDeal in the same click.
   const newDeal = async (mode = batchMode) => {
+    const requestId = ++dealRequestId.current;
     setErr("");
     setBusy(true);
     setPicks({});
     setResult(null);
     setSwapsRemaining(2);
     try {
-      setDeal(await authedFetch("deal", { batch_mode: mode }));
+      const d = await authedFetch("deal", { batch_mode: mode });
+      if (dealRequestId.current === requestId) setDeal(d);
     } catch (e) {
-      setErr(e.message);
+      if (dealRequestId.current === requestId) setErr(e.message);
     } finally {
-      setBusy(false);
+      if (dealRequestId.current === requestId) setBusy(false);
     }
   };
 
@@ -295,7 +303,11 @@ function Game({ session }) {
                     <div style={S.labelDistillery}>{b.distillery}</div>
                     <div style={S.labelName}>{b.name}</div>
                     <div style={S.labelMeta}>
-                      {b.proof ? `${b.proof} PROOF` : "BATCH PROOF"}
+                      {deal?.batch_mode && b.parent_name
+                        ? `PART OF ${b.parent_name.toUpperCase()}`
+                        : b.proof
+                        ? `${b.proof} PROOF`
+                        : "PROOF N/A"}
                     </div>
                     <div style={S.labelRating}>
                       <span style={S.ratingNum}>
@@ -339,7 +351,7 @@ function Game({ session }) {
           )}
           <div style={S.underRow}>
             {result ? (
-              <button className="pourBtn" onClick={newDeal}>
+              <button className="pourBtn" onClick={() => newDeal()}>
                 NEXT POUR →
               </button>
             ) : (
@@ -627,7 +639,7 @@ const S = {
     fontSize: 22, fontWeight: 700, color: "#2A1B0C", margin: "10px 0 4px",
     lineHeight: 1.15, minHeight: 52, display: "flex", alignItems: "center", justifyContent: "center",
   },
-  labelMeta: { fontSize: 11, letterSpacing: "0.3em", color: "#7A5A2E" },
+  labelMeta: { fontSize: 11, letterSpacing: "0.3em", color: "#7A5A2E", minHeight: 26, lineHeight: 1.4 },
   labelRating: { margin: "14px 0 12px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
   ratingNum: { fontSize: 30, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E" },
