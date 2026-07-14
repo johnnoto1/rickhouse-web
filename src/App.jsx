@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
@@ -80,6 +80,12 @@ function Game({ session }) {
   const [err, setErr] = useState("");
   const [swapsRemaining, setSwapsRemaining] = useState(2);
   const [swappingSlot, setSwappingSlot] = useState(null);
+  const [batchMode, setBatchMode] = useState(false);
+  // In-memory only (not localStorage) — resets on reload, matches the task's
+  // "persists for the session" spec. Explainer shows on the first ever
+  // enable in this session and never again, even after toggling off/on.
+  const [showBatchExplainer, setShowBatchExplainer] = useState(false);
+  const explainerShownRef = useRef(false);
 
   const isAnon = session?.user?.is_anonymous === true;
 
@@ -97,19 +103,34 @@ function Game({ session }) {
       return data;
     });
 
-  const newDeal = async () => {
+  // mode defaults to the current batchMode state; the toggle passes the
+  // NEW value explicitly since setBatchMode hasn't re-rendered yet when it
+  // also calls newDeal in the same click.
+  const newDeal = async (mode = batchMode) => {
     setErr("");
     setBusy(true);
     setPicks({});
     setResult(null);
     setSwapsRemaining(2);
     try {
-      setDeal(await authedFetch("deal"));
+      setDeal(await authedFetch("deal", { batch_mode: mode }));
     } catch (e) {
       setErr(e.message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleBatchMode = () => {
+    const next = !batchMode;
+    setBatchMode(next);
+    if (next && !explainerShownRef.current) {
+      explainerShownRef.current = true;
+      setShowBatchExplainer(true);
+    } else if (!next) {
+      setShowBatchExplainer(false);
+    }
+    newDeal(next);
   };
 
   // Swap out a bottle you don't recognize — server picks the replacement.
@@ -221,6 +242,23 @@ function Game({ session }) {
       {view === "rank" && (
         <main style={S.main}>
           {err && <p style={{ ...S.hint, color: "#E8B45A" }}>{err}</p>}
+          <div style={S.batchToggleRow}>
+            <button
+              type="button"
+              className={"batchToggle" + (batchMode ? " batchToggleOn" : "")}
+              onClick={toggleBatchMode}
+              disabled={busy}
+              aria-pressed={batchMode}
+            >
+              <span className="batchToggleDot" />
+              BATCH MODE
+            </button>
+            {showBatchExplainer && (
+              <span style={S.batchExplainer}>
+                Head-to-head between specific batch releases.
+              </span>
+            )}
+          </div>
           <div style={S.cardRow}>
             {(deal?.bottles ?? []).map((b, idx) => {
               const role = picks[b.id];
@@ -458,7 +496,32 @@ function AddEmail({ onDone }) {
 function Leaderboard() {
   const [rows, setRows] = useState(null);
   useEffect(() => {
-    fetchLeaderboardCatalog(supabase).then(setRows);
+    fetchLeaderboardCatalog(supabase).then((catalog) => {
+      // Children stay off the leaderboard entirely — a line and each of its
+      // batch releases would otherwise show up as 3-5 near-duplicate rows
+      // back to back (same name, same distillery), drowning the rest of
+      // the board in density/clutter for very little signal. Batches are
+      // still fully rankable — just on the parent's own profile page (its
+      // BATCHES table), plus Trade Calculator and Collection where picking
+      // a specific batch is the point.
+      const childCounts = new Map();
+      for (const r of catalog) {
+        if (r.bottles?.parent_id) {
+          childCounts.set(r.bottles.parent_id, (childCounts.get(r.bottles.parent_id) ?? 0) + 1);
+        }
+      }
+      // Rank recomputed within the parents-only set — a hidden child
+      // shouldn't create a gap in the # column's numbering. Catalog already
+      // arrives rating-desc, and filter() preserves that relative order.
+      const parentsOnly = catalog
+        .filter((r) => r.bottles?.parent_id == null)
+        .map((r, i) => ({
+          ...r,
+          ratingRank: i + 1,
+          childCount: childCounts.get(r.bottle_id) ?? 0,
+        }));
+      setRows(parentsOnly);
+    });
   }, []);
   return <Board title="BARREL RANKINGS" rows={rows} sortable />;
 }
@@ -594,6 +657,11 @@ function Board({ title, rows, empty, sortable = false }) {
               <span style={S.rowName}>
                 {r.bottles?.name}
                 <span style={S.rowDist}> {r.bottles?.distillery}</span>
+                {r.childCount > 0 && (
+                  <span style={S.rowBatchBadge}>
+                    {r.childCount} batch{r.childCount === 1 ? "" : "es"}
+                  </span>
+                )}
               </span>
               <span style={S.rowRecord} className="hideMobile">{r.wins}–{r.losses}</span>
               <span style={S.rowRating}>{Math.round(r.rating)}</span>
@@ -602,7 +670,7 @@ function Board({ title, rows, empty, sortable = false }) {
                   {r.price != null ? (
                     <>
                       {fmtMoney(r.price)}
-                      {r.priceIsFallback && <span style={S.priceMsrpTag}>MSRP</span>}
+                      {r.priceTag && <span style={S.priceTagStyle}>{r.priceTag}</span>}
                     </>
                   ) : (
                     "—"
@@ -672,6 +740,11 @@ const S = {
   nav: { display: "flex", justifyContent: "center", gap: 8, margin: "22px 0 8px", flexWrap: "wrap" },
   main: { flex: 1, padding: "10px 16px 30px", maxWidth: 1080, width: "100%", boxSizing: "border-box" },
   cardRow: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 18 },
+  batchToggleRow: {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    gap: 12, flexWrap: "wrap", marginBottom: 16,
+  },
+  batchExplainer: { fontSize: 12, color: "#C9A96E", fontStyle: "italic" },
   labelBorder: {
     border: "1px solid #8A6A3A", margin: 6, padding: "18px 14px 16px",
     textAlign: "center", display: "flex", flexDirection: "column",
@@ -702,11 +775,16 @@ const S = {
   rowRank: { width: 30, fontWeight: 700, color: "#A6521B" },
   rowName: { flex: 1, minWidth: 0, fontWeight: 600 },
   rowDist: { fontWeight: 400, fontSize: 11, color: "#7A5A2E", marginLeft: 6 },
+  rowBatchBadge: {
+    fontWeight: 700, fontSize: 9, color: "#A6521B", marginLeft: 6,
+    letterSpacing: "0.05em", textTransform: "uppercase",
+    border: "1px solid #A6521B", borderRadius: 3, padding: "1px 4px",
+  },
   rowRecord: { width: 64, textAlign: "right", fontSize: 12, color: "#7A5A2E" },
   rowRating: { width: 58, textAlign: "right", fontWeight: 700 },
   rowPrice: { width: 72, textAlign: "right", fontSize: 13 },
   rowValue: { width: 50, textAlign: "right", fontWeight: 700 },
-  priceMsrpTag: {
+  priceTagStyle: {
     fontSize: 9, color: "#B08040", marginLeft: 4,
     letterSpacing: "0.05em", textTransform: "uppercase",
   },
@@ -730,7 +808,13 @@ const CSS = `
 .tab { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 8px 20px; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.25em; cursor: pointer; transition: all .15s; text-decoration: none; display: inline-block; }
 .tab:hover { border-color: #B08040; color: #E8B45A; }
 .tabOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; font-weight: 700; }
-.tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+.batchToggle { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 7px 16px; font-family: Georgia, serif; font-size: 11px; letter-spacing: 0.2em; font-weight: 700; cursor: pointer; border-radius: 999px; transition: all .15s; }
+.batchToggle:hover:not(:disabled) { border-color: #B08040; color: #E8B45A; }
+.batchToggle:disabled { opacity: .5; cursor: default; }
+.batchToggleDot { width: 8px; height: 8px; border-radius: 50%; background: #5A3A12; transition: background .15s; }
+.batchToggleOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; }
+.batchToggleOn .batchToggleDot { background: #2A1B0C; }
+.tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible, .batchToggle:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
 .sortHdr { background: none; border: none; padding: 0; margin: 0; font-family: inherit; font-size: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .sortHdr:hover { color: #E8B45A !important; }
 @media (max-width: 500px) { .hideMobile { display: none; } }

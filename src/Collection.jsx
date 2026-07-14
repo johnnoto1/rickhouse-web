@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
+import { resolvePrice } from "./tradeValue.js";
 
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
-
-// Effective price: secondary market value when available, else MSRP. Null when neither is set.
-const effectivePrice = (b) => b.secondary_value ?? b.msrp_usd ?? null;
-const isFallback = (b) => b.secondary_value == null && b.msrp_usd != null;
 
 export default function Collection() {
   const [session, setSession] = useState(null);
@@ -54,7 +51,7 @@ function Shelf({ userId }) {
   const loadCatalog = () =>
     supabase
       .from("bottle_ratings")
-      .select("rating, bottles!inner(id, name, distillery, msrp_usd, secondary_value, status)")
+      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status)")
       .order("rating", { ascending: false })
       .then(({ data }) => {
         setCatalog(
@@ -68,7 +65,7 @@ function Shelf({ userId }) {
     supabase
       .from("collections")
       .select(
-        "id, qty, added_at, bottles(id, slug, name, distillery, msrp_usd, secondary_value, bottle_ratings(rating, wins, losses))"
+        "id, qty, added_at, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, bottle_ratings(rating, wins, losses))"
       )
       .eq("user_id", userId)
       .order("added_at", { ascending: false })
@@ -92,6 +89,24 @@ function Shelf({ userId }) {
     (rows ?? []).forEach((r) => m.set(r.bottles?.id, r));
     return m;
   }, [rows]);
+
+  // Parent lookup for the batch-hierarchy pricing rule — built from
+  // catalog (the full active-bottle fetch used for the picker), which is
+  // where a parent's own data lives even for an OWNED row (rows only
+  // contains bottles the user actually added, not necessarily their
+  // parent line too).
+  const catalogById = useMemo(() => {
+    const m = new Map();
+    catalog.forEach((b) => m.set(b.id, b));
+    return m;
+  }, [catalog]);
+
+  // Effective price + tag, batch-hierarchy aware: a child with no
+  // secondary_value of its own inherits its parent's — shared resolvePrice
+  // formula (tradeValue.js), same rule the leaderboard, bottle profile, and
+  // trade calculator use, not a reimplementation.
+  const priceInfo = (b) =>
+    b ? resolvePrice(b, b.parent_id ? catalogById.get(b.parent_id) : null) : { price: null, tag: null };
 
   const pickerResults = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -138,7 +153,7 @@ function Shelf({ userId }) {
 
   const totalBottles = (rows ?? []).reduce((t, r) => t + r.qty, 0);
   const totalStreetValue = (rows ?? []).reduce((t, r) => {
-    const price = r.bottles ? effectivePrice(r.bottles) : null;
+    const price = priceInfo(r.bottles).price;
     return t + (price ?? 0) * r.qty;
   }, 0);
   const ratedRows = (rows ?? []).filter((r) => r.bottles?.bottle_ratings);
@@ -208,8 +223,7 @@ function Shelf({ userId }) {
                 {rows.map((r) => {
                   const b = r.bottles;
                   if (!b) return null;
-                  const price = effectivePrice(b);
-                  const fallback = isFallback(b);
+                  const { price, tag } = priceInfo(b);
                   const rating = b.bottle_ratings?.rating ?? 1500;
                   const wins = b.bottle_ratings?.wins ?? 0;
                   const losses = b.bottle_ratings?.losses ?? 0;
@@ -235,9 +249,9 @@ function Shelf({ userId }) {
                           {price != null ? (
                             <span className="flex items-center gap-1">
                               {money(price)}
-                              {fallback && (
+                              {tag && (
                                 <span className="text-[10px] uppercase tracking-wider text-stone-500 border border-stone-400 rounded px-1">
-                                  MSRP
+                                  {tag}
                                 </span>
                               )}
                             </span>
@@ -336,7 +350,7 @@ function Shelf({ userId }) {
               )}
               {pickerResults.map((b) => {
                 const owned = byBottleId.get(b.id);
-                const price = effectivePrice(b);
+                const { price, tag } = priceInfo(b);
                 return (
                   <button
                     key={b.id}
@@ -353,6 +367,11 @@ function Shelf({ userId }) {
                       <span className="text-stone-500 uppercase tracking-wider">{b.distillery}</span>
                       <span className="text-stone-400 flex items-center gap-2">
                         {price != null ? money(price) : "—"}
+                        {tag && (
+                          <span className="text-[9px] uppercase tracking-wider text-stone-500 border border-stone-600 rounded px-1">
+                            {tag}
+                          </span>
+                        )}
                         {owned && (
                           <span className="text-amber-500">owned ×{owned.qty}</span>
                         )}

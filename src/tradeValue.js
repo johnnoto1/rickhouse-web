@@ -44,3 +44,31 @@ export function normalizeValuePerDollar(items) {
   const maxRaw = raws.reduce((m, v) => (v != null && v > m ? v : m), 0);
   return raws.map((r) => (r != null && maxRaw > 0 ? Math.round((r / maxRaw) * 100) : null));
 }
+
+// ---- Batch hierarchy: price with parent inheritance ----
+// Locked pricing rule (from the batch-hierarchy seed review): a child with
+// no secondary_value of its own inherits its PARENT's secondary_value for
+// display and for the VALUE formula, tagged "LINE PRICE" (styled like the
+// MSRP tag) so it's clear the number came from the line, not that specific
+// batch. A child only falls back to its own msrp_usd if the parent ALSO
+// has no secondary — same MSRP-fallback rule every other bottle already
+// uses. Parents and standalone bottles (no parent_id) are unaffected: own
+// secondary, else own msrp_usd, else null.
+//
+// One implementation, called everywhere a price is shown or fed into the
+// VALUE formula (leaderboard, bottle profile, trade calculator,
+// collection) — structural parity, same reasoning as normalizeValuePerDollar
+// itself. `parent` is the parent bottle row (or null/undefined); callers
+// resolve it client-side from whatever catalog they already fetched.
+export function resolvePrice(bottle, parent) {
+  if (bottle.secondary_value != null) {
+    return { price: bottle.secondary_value, tag: null };
+  }
+  if (parent?.secondary_value != null) {
+    return { price: parent.secondary_value, tag: "LINE PRICE" };
+  }
+  if (bottle.msrp_usd != null) {
+    return { price: bottle.msrp_usd, tag: "MSRP" };
+  }
+  return { price: null, tag: null };
+}

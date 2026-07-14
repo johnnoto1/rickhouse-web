@@ -1,14 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
-import { bottleValue, tradePct } from "./tradeValue.js";
+import { bottleValue, tradePct, resolvePrice } from "./tradeValue.js";
 
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
-
-// Per-bottle effective price: secondary market when available, else MSRP.
-// Returns null if neither is set — callers must guard.
-const effectivePrice = (b) => b.secondary_value ?? b.msrp;
 
 export default function TradeCalculator() {
   const [catalog, setCatalog] = useState([]);
@@ -23,7 +19,7 @@ export default function TradeCalculator() {
     supabase
       .from("bottle_ratings")
       .select(
-        "rating, rounds_played, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, secondary_source, secondary_updated_at, status)"
+        "rating, rounds_played, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, secondary_source, secondary_updated_at, parent_id, status)"
       )
       .order("rating", { ascending: false })
       .then(({ data }) => {
@@ -46,8 +42,56 @@ export default function TradeCalculator() {
     [catalog]
   );
 
+  // Fast id→bottle lookup rebuilt when catalog changes — also doubles as
+  // the parent lookup for the batch-hierarchy pricing rule below, since
+  // this fetch is unconditional over every active bottle (parents and
+  // children alike), so a child's parent_id always resolves here.
+  const byId = useMemo(
+    () => Object.fromEntries(catalog.map((b) => [b.id, b])),
+    [catalog]
+  );
+
+  // Effective price + tag, batch-hierarchy aware: a child with no
+  // secondary_value of its own inherits its parent's — shared resolvePrice
+  // formula (tradeValue.js), same rule the leaderboard and bottle profile
+  // use, not a reimplementation. Returns { price, tag }; price is null if
+  // nothing is set anywhere in the chain — callers must guard.
+  const priceInfo = (b) => resolvePrice(b, b.parent_id ? byId[b.parent_id] : null);
+  const effectivePrice = (b) => priceInfo(b).price;
+
+  // Compact batch naming for the picker: "{Parent Name} · {batch suffix}"
+  // instead of visually grouping/indenting children under their parent.
+  // Grouping would fight the picker's own sort modes (top rated / best
+  // value / cheapest) — a child can legitimately land far from its parent
+  // under any of those, so a rigid adjacency-based layout would break.
+  // The compact name keeps the line identity visible wherever a batch
+  // sorts to, without depending on where that is.
+  const displayName = (b) => {
+    if (!b.parent_id) return b.name;
+    const parent = byId[b.parent_id];
+    if (!parent) return b.name;
+    const suffix = b.name.startsWith(parent.name)
+      ? b.name.slice(parent.name.length).trim()
+      : b.name;
+    return `${parent.name} · ${suffix || b.name}`;
+  };
+
+  // Human-readable price line for a bottle card/picker row. Preserves the
+  // existing "MSRP $X · Secondary $Y" dual-display when a real secondary
+  // price is available (own or inherited) and there's also an MSRP to
+  // show alongside it; falls back to a single "$X MSRP" when nothing else
+  // is set. null when there's no price at all anywhere in the chain.
+  const priceLine = (b) => {
+    const { price, tag } = priceInfo(b);
+    if (price == null) return null;
+    if (tag === "MSRP") return `${money(price)} MSRP`;
+    const label = tag === "LINE PRICE" ? "Line price" : "Secondary";
+    return b.msrp != null ? `MSRP ${money(b.msrp)} · ${label} ${money(price)}` : `${label} ${money(price)}`;
+  };
+
   // ★ Top-quartile ELO/price threshold — recomputed after load.
-  // Uses each bottle's effectivePrice so secondary values shift the cutoff.
+  // Uses each bottle's effectivePrice so secondary values (own or
+  // inherited) shift the cutoff.
   const valueCutoff = useMemo(() => {
     const priced = catalog.filter((b) => effectivePrice(b) != null);
     if (priced.length === 0) return Infinity;
@@ -55,19 +99,17 @@ export default function TradeCalculator() {
       .map((b) => b.elo / effectivePrice(b))
       .sort((a, b) => a - b);
     return ratios[Math.floor(ratios.length * 0.75)];
-  }, [catalog]);
+    // effectivePrice is a plain derivation of byId/catalog (both listed
+    // below), recreated every render — including it here would just
+    // thrash the memo without changing when it actually needs to recompute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog, byId]);
 
   // ELO per effective-price dollar; null when no price available.
   const ratio = (b) => {
     const ep = effectivePrice(b);
     return ep != null ? b.elo / ep : null;
   };
-
-  // Fast id→bottle lookup rebuilt when catalog changes.
-  const byId = useMemo(
-    () => Object.fromEntries(catalog.map((b) => [b.id, b])),
-    [catalog]
-  );
 
   // Bottles on the *opposite* side are blocked from the picker — you can't
   // trade a bottle for itself. Same-side duplicates (e.g. 2× Eagle Rare 10)
@@ -104,6 +146,9 @@ export default function TradeCalculator() {
       });
     }
     return list;
+    // ratio is a plain derivation of byId/catalog, recreated every render —
+    // catalog is already listed, which is what actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, sortKey, oppositeIds, catalog]);
 
   const getBotles = (ids) => ids.map((id) => byId[id]).filter(Boolean);
@@ -122,7 +167,13 @@ export default function TradeCalculator() {
 
   const hasTrade = sideA.length > 0 && sideB.length > 0;
   const tradeBottles = [...getBotles(sideA), ...getBotles(sideB)];
-  const anySecondary = tradeBottles.some((b) => b.secondary_value != null);
+  // A real secondary price — the bottle's own, or inherited from its
+  // parent — not just an MSRP fallback. Drives whether the verdict beam
+  // shows a separate "secondary" delta alongside the MSRP delta.
+  const anySecondary = tradeBottles.some((b) => {
+    const info = priceInfo(b);
+    return info.price != null && info.tag !== "MSRP";
+  });
   // Only show price deltas when every bottle in the trade has at least an MSRP.
   const allPriced =
     hasTrade && tradeBottles.every((b) => b.msrp != null);
@@ -319,8 +370,7 @@ export default function TradeCalculator() {
                   )}
                   {getBotles(ids).map((b, idx) => {
                     const r = ratio(b);
-                    const hasPrice = b.msrp != null;
-                    const hasSecondary = b.secondary_value != null;
+                    const line = priceLine(b);
                     return (
                       <div
                         key={`${b.id}-${idx}`}
@@ -341,13 +391,9 @@ export default function TradeCalculator() {
                             {anyGraduated && b.rounds_played < 10 && (
                               <span className="italic" style={{ color: "#B08040" }}>provisional</span>
                             )}
-                            {hasPrice && (
+                            {line && (
                               <>
-                                <span>
-                                  {hasSecondary
-                                    ? `MSRP ${money(b.msrp)} · Secondary ${money(b.secondary_value)}`
-                                    : `${money(b.msrp)} MSRP`}
-                                </span>
+                                <span>{line}</span>
                                 <span
                                   className={
                                     r >= valueCutoff
@@ -459,8 +505,7 @@ export default function TradeCalculator() {
               )}
               {pickerResults.map((b) => {
                 const r = ratio(b);
-                const hasPrice = b.msrp != null;
-                const hasSecondary = b.secondary_value != null;
+                const line = priceLine(b);
                 return (
                   <button
                     key={b.id}
@@ -469,7 +514,7 @@ export default function TradeCalculator() {
                   >
                     <div className="flex items-baseline justify-between gap-2">
                       <span className="font-serif text-amber-100 truncate">
-                        {b.name}
+                        {displayName(b)}
                       </span>
                       <span className="text-amber-400 font-semibold text-sm shrink-0">
                         {b.elo}
@@ -479,7 +524,7 @@ export default function TradeCalculator() {
                       <span className="text-stone-500 uppercase tracking-wider">
                         {b.distillery}
                       </span>
-                      {hasPrice && (
+                      {line && (
                         <span
                           className={
                             r >= valueCutoff
@@ -487,9 +532,7 @@ export default function TradeCalculator() {
                               : "text-stone-400"
                           }
                         >
-                          {hasSecondary
-                            ? `${money(b.msrp)} MSRP · ${money(b.secondary_value)} secondary`
-                            : money(b.msrp)}
+                          {line}
                           {" · "}
                           {r.toFixed(1)} ELO/$
                           {r >= valueCutoff ? " ★" : ""}

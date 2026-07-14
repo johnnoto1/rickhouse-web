@@ -8,7 +8,8 @@ export default function Landing() {
   useEffect(() => {
     supabase
       .from("bottle_ratings")
-      .select("rating, wins, losses, bottles(name, distillery)")
+      .select("rating, wins, losses, bottles!inner(name, distillery, parent_id)")
+      .is("bottles.parent_id", null)
       .order("rating", { ascending: false })
       .limit(10)
       .then(({ data }) => setRows(data ?? []));

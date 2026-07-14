@@ -11,11 +11,6 @@ const fmtDate = (d) =>
 
 const fmtProof = (p) => (Number.isInteger(p) ? String(p) : p.toFixed(1));
 
-// Effective price: secondary market value when available, else MSRP (same
-// fallback rule as the leaderboard and TradeCalculator's effectivePrice).
-const effectivePrice = (b) => b.secondary_value ?? b.msrp_usd ?? null;
-const isFallback = (b) => b.secondary_value == null && b.msrp_usd != null;
-
 export default function BottleProfile() {
   const { slug } = useParams();
   const [state, setState] = useState({ status: "loading" });
@@ -35,7 +30,7 @@ export default function BottleProfile() {
 
       const { data: bottle } = await supabase
         .from("bottles")
-        .select("id, slug, name, distillery, msrp_usd, secondary_value, proof, proof_note, status")
+        .select("id, slug, name, distillery, msrp_usd, secondary_value, proof, proof_note, status, parent_id")
         .eq("slug", slug)
         .maybeSingle();
 
@@ -68,7 +63,22 @@ export default function BottleProfile() {
 
       if (cancelled) return;
 
+      // catalog carries price/priceTag/value already resolved with the
+      // batch-hierarchy inheritance rule (leaderboardCatalog.js) — read
+      // them off this bottle's own row rather than recomputing, so a
+      // child's numbers here are structurally guaranteed to match wherever
+      // else this same catalog fetch is used.
       const catalogRow = catalog.find((r) => r.bottle_id === bottle.id);
+      const parentRow = bottle.parent_id
+        ? catalog.find((r) => r.bottle_id === bottle.parent_id)
+        : null;
+      // Children of THIS bottle (only populated when this bottle is a
+      // parent) — same catalog fetch, no extra query. Ordered by rating
+      // desc for the BATCHES table. Named "batches" (not "children") to
+      // avoid colliding with React's reserved children prop downstream.
+      const batches = catalog
+        .filter((r) => r.bottles?.parent_id === bottle.id)
+        .sort((a, b) => b.rating - a.rating);
 
       setState({
         status: "ok",
@@ -76,6 +86,10 @@ export default function BottleProfile() {
         rating: ratingRow ?? { rating: 1500, wins: 0, losses: 0, rounds_played: 0 },
         snapshots: snapshots ?? [],
         value: catalogRow?.value ?? null,
+        price: catalogRow?.price ?? null,
+        priceTag: catalogRow?.priceTag ?? null,
+        parent: parentRow?.bottles ?? null,
+        batches,
       });
     })();
 
@@ -142,10 +156,7 @@ function Page({ children }) {
   );
 }
 
-function Profile({ bottle, rating, snapshots, value }) {
-  const price = effectivePrice(bottle);
-  const fallback = isFallback(bottle);
-
+function Profile({ bottle, rating, snapshots, value, price, priceTag, parent, batches }) {
   const { rankNow, rankTrend } = useMemo(() => computeRankTrend(snapshots), [snapshots]);
 
   const proofDisplay =
@@ -163,7 +174,7 @@ function Profile({ bottle, rating, snapshots, value }) {
     {
       label: "Price",
       value: price != null ? money(price) : "—",
-      tag: fallback ? "MSRP" : null,
+      tag: priceTag,
     },
     { label: "MSRP", value: bottle.msrp_usd != null ? money(bottle.msrp_usd) : "—" },
     { label: "Proof", value: proofDisplay },
@@ -179,6 +190,17 @@ function Profile({ bottle, rating, snapshots, value }) {
         <div className="text-[11px] uppercase tracking-[0.35em] text-amber-600 mt-2">
           {bottle.distillery}
         </div>
+        {parent && (
+          <div className="text-xs text-amber-500/80 mt-2">
+            part of{" "}
+            <Link
+              to={`/bottle/${parent.slug}`}
+              className="text-amber-300 hover:text-amber-100 underline underline-offset-2 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+            >
+              {parent.name}
+            </Link>
+          </div>
+        )}
         <div className="mt-7 font-serif font-bold text-amber-400 text-6xl sm:text-7xl leading-none">
           {Math.round(rating.rating)}
         </div>
@@ -189,9 +211,21 @@ function Profile({ bottle, rating, snapshots, value }) {
 
       <section className="bg-amber-50 rounded-md border border-amber-200 shadow-md p-4 sm:p-5 mb-5">
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-4 text-center">
-          {stats.map((s) => (
+          {stats.map((s) => {
+            // proof_note prose (e.g. "124–140 proof, varies by batch...")
+            // can run well past what a single truncated line can show —
+            // truncate on a centered flex row clips from both sides, not
+            // just the end, producing unreadable mid-string fragments.
+            // Long values wrap onto a few smaller lines instead.
+            const longValue = typeof s.value === "string" && s.value.length > 14;
+            return (
             <div key={s.label} className="min-w-0">
-              <div className="text-stone-900 font-bold text-lg truncate flex items-center justify-center gap-1.5 flex-wrap">
+              <div
+                className={
+                  "text-stone-900 font-bold flex items-center justify-center gap-1.5 flex-wrap " +
+                  (longValue ? "text-xs leading-snug" : "text-lg truncate")
+                }
+              >
                 {s.value}
                 {s.tag && (
                   <span className="text-[9px] uppercase tracking-wider text-stone-500 border border-stone-400 rounded px-1 font-normal">
@@ -218,12 +252,72 @@ function Profile({ bottle, rating, snapshots, value }) {
                 {s.label}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </section>
 
+      {batches.length > 0 && <BatchesTable batches={batches} />}
+
       <RatingHistory snapshots={snapshots} />
     </>
+  );
+}
+
+// The feature's showcase — "the crowd ranks ECBP batches." Rows already
+// arrive rating-desc (sorted where batches is built, in the loading
+// effect above), so index+1 doubles as the batch's rank within this line.
+// Proof/W–L drop at the same width the leaderboard itself collapses at
+// (Tailwind's sm: breakpoint, 640px), keeping # / Batch / Rating / Price —
+// the same four columns the leaderboard keeps at 380px.
+function BatchesTable({ batches }) {
+  return (
+    <section className="bg-amber-50 rounded-md border border-amber-200 shadow-md p-4 sm:p-5 mb-5">
+      <h2 className="font-serif text-stone-900 text-lg mb-1">Batches</h2>
+      <p className="text-xs text-stone-500 mb-3">Ranked by the crowd, highest rated first.</p>
+
+      <div className="flex items-baseline gap-2 px-1 pb-2 border-b border-stone-300 text-[9px] uppercase tracking-widest text-stone-500 font-bold">
+        <span className="w-5 shrink-0">#</span>
+        <span className="flex-1 min-w-0">Batch</span>
+        <span className="w-14 shrink-0 text-right hidden sm:block">Proof</span>
+        <span className="w-14 shrink-0 text-right">Rating</span>
+        <span className="w-16 shrink-0 text-right hidden sm:block">W–L</span>
+        <span className="w-20 shrink-0 text-right">Price</span>
+      </div>
+
+      {batches.map((c, i) => (
+        <Link
+          key={c.bottle_id}
+          to={`/bottle/${c.bottles.slug}`}
+          className={
+            "flex items-baseline gap-2 px-1 py-2 -mx-1 rounded text-sm hover:bg-amber-100/70 focus:outline-none focus:ring-2 focus:ring-amber-500" +
+            (i % 2 === 1 ? " bg-amber-900/[0.03]" : "")
+          }
+        >
+          <span className="w-5 shrink-0 font-bold text-amber-800">{i + 1}</span>
+          <span className="flex-1 min-w-0 font-serif font-semibold text-stone-900 truncate">
+            {c.bottles.name}
+          </span>
+          <span className="w-14 shrink-0 text-right text-stone-600 hidden sm:block">
+            {c.bottles.proof != null ? fmtProof(c.bottles.proof) : "—"}
+          </span>
+          <span className="w-14 shrink-0 text-right font-bold text-stone-900">
+            {Math.round(c.rating)}
+          </span>
+          <span className="w-16 shrink-0 text-right text-stone-500 hidden sm:block">
+            {c.wins}–{c.losses}
+          </span>
+          <span className="w-20 shrink-0 text-right text-stone-700">
+            {c.price != null ? money(c.price) : "—"}
+            {c.priceTag && (
+              <span className="block text-[8px] uppercase tracking-wider text-stone-400">
+                {c.priceTag}
+              </span>
+            )}
+          </span>
+        </Link>
+      ))}
+    </section>
   );
 }
 
