@@ -19,3 +19,28 @@ export function tradePct(valueA, valueB) {
   const max = Math.max(valueA, valueB);
   return max > 0 ? (Math.abs(valueB - valueA) / max) * 100 : 0;
 }
+
+// ---- Leaderboard "VALUE" column: convex trade value per dollar ----
+// Shared by the leaderboard and the bottle profile page so the displayed
+// number can never drift between the two — both call this, not a
+// reimplementation of the formula.
+
+// Raw ratio; null when the bottle has no eligible price or sits at/below
+// the ELO floor (bottleValue is 0 there, which would divide to 0, not null).
+export function rawValuePerDollar(rating, price) {
+  if (price == null || price <= 0) return null;
+  const raw = bottleValue(rating);
+  return raw > 0 ? raw / price : null;
+}
+
+// items: array of { rating, price }. Returns a parallel array of integers
+// (or null), normalized so the single best-value item in this set is
+// exactly 100 and everything else scales linearly against it. Normalizing
+// is only meaningful over a fixed comparison set — callers must pass the
+// same catalog slice everywhere they want matching numbers (e.g. the full
+// active catalog, same as the leaderboard's fetch).
+export function normalizeValuePerDollar(items) {
+  const raws = items.map((it) => rawValuePerDollar(it.rating, it.price));
+  const maxRaw = raws.reduce((m, v) => (v != null && v > m ? v : m), 0);
+  return raws.map((r) => (r != null && maxRaw > 0 ? Math.round((r / maxRaw) * 100) : null));
+}

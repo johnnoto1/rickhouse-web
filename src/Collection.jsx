@@ -68,7 +68,7 @@ function Shelf({ userId }) {
     supabase
       .from("collections")
       .select(
-        "id, qty, added_at, bottles(id, name, distillery, msrp_usd, secondary_value, bottle_ratings(rating, wins, losses))"
+        "id, qty, added_at, bottles(id, slug, name, distillery, msrp_usd, secondary_value, bottle_ratings(rating, wins, losses))"
       )
       .eq("user_id", userId)
       .order("added_at", { ascending: false })
@@ -220,9 +220,12 @@ function Shelf({ userId }) {
                       className="bg-amber-50 rounded-md border border-amber-200 shadow-md px-3 py-2.5 flex items-start gap-3"
                     >
                       <div className="flex-1 min-w-0">
-                        <div className="font-serif font-bold text-stone-900 leading-tight truncate">
+                        <Link
+                          to={`/bottle/${b.slug}`}
+                          className="font-serif font-bold text-stone-900 leading-tight truncate block hover:text-amber-700 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+                        >
                           {b.name}
-                        </div>
+                        </Link>
                         <div className="text-[11px] uppercase tracking-widest text-stone-500 mt-0.5">
                           {b.distillery}
                         </div>

@@ -4,6 +4,8 @@ import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
 import Collection from "./Collection";
 import Landing from "./Landing";
+import BottleProfile from "./BottleProfile";
+import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -19,6 +21,7 @@ export default function App() {
       <Route path="/" element={<Landing />} />
       <Route path="/trade" element={<TradeCalculator />} />
       <Route path="/collection" element={<Collection />} />
+      <Route path="/bottle/:slug" element={<BottleProfile />} />
       <Route path="/*" element={<RickhouseApp />} />
     </Routes>
   );
@@ -455,17 +458,7 @@ function AddEmail({ onDone }) {
 function Leaderboard() {
   const [rows, setRows] = useState(null);
   useEffect(() => {
-    supabase
-      .from("bottle_ratings")
-      .select("rating, wins, losses, rounds_played, bottles(name, distillery, msrp_usd, secondary_value)")
-      .order("rating", { ascending: false })
-      .limit(200)
-      .then(({ data }) =>
-        // ratingRank is fixed at fetch time (rows already arrive rating-desc)
-        // so the # column stays pinned to rating order no matter how the
-        // table is subsequently sorted client-side.
-        setRows((data ?? []).map((r, i) => ({ ...r, ratingRank: i + 1 })))
-      );
+    fetchLeaderboardCatalog(supabase).then(setRows);
   }, []);
   return <Board title="BARREL RANKINGS" rows={rows} sortable />;
 }
@@ -497,37 +490,16 @@ function Board({ title, rows, empty, sortable = false }) {
     }
   };
 
-  // Price + convex value-per-dollar, computed once per fetch — independent
-  // of the active sort. VALUE = ((rating-1200)/100)^2.5 / price, normalized
-  // within this fetched set so the best-value bottle displays exactly 100.
-  const computedRows = useMemo(() => {
-    if (!rows || !sortable) return rows;
-    const withPrice = rows.map((r) => {
-      const secondary = r.bottles?.secondary_value ?? null;
-      const msrp = r.bottles?.msrp_usd ?? null;
-      const price = secondary ?? msrp;
-      return { ...r, price, priceIsFallback: secondary == null && msrp != null };
-    });
-    const raws = withPrice.map((r) =>
-      r.rating > 1200 && r.price != null && r.price > 0
-        ? Math.pow((r.rating - 1200) / 100, 2.5) / r.price
-        : null
-    );
-    const maxRaw = raws.reduce((m, v) => (v != null && v > m ? v : m), 0);
-    return withPrice.map((r, i) => ({
-      ...r,
-      value:
-        raws[i] != null && maxRaw > 0
-          ? Math.round((raws[i] / maxRaw) * 100)
-          : null,
-    }));
-  }, [rows, sortable]);
+  // rows (for a sortable board) already carry price/priceIsFallback/value/
+  // ratingRank — fetchLeaderboardCatalog computes all of that once at fetch
+  // time, independent of the active sort, using the same shared formula the
+  // bottle profile page calls too.
 
   // Null price/value always sorts last, in both asc and desc.
   const displayRows = useMemo(() => {
-    if (!computedRows || !sortable) return computedRows;
+    if (!rows || !sortable) return rows;
     const dir = sortDir === "asc" ? 1 : -1;
-    const arr = [...computedRows];
+    const arr = [...rows];
     if (sortKey === "rating") {
       arr.sort((a, b) => dir * (a.rating - b.rating));
     } else if (sortKey === "price") {
@@ -546,7 +518,7 @@ function Board({ title, rows, empty, sortable = false }) {
       });
     }
     return arr;
-  }, [computedRows, sortKey, sortDir, sortable]);
+  }, [rows, sortKey, sortDir, sortable]);
 
   const finalRows = sortable ? displayRows : rows;
   const anyGraduated = finalRows?.some((r) => (r.rounds_played ?? 0) >= 10) ?? false;
@@ -609,8 +581,15 @@ function Board({ title, rows, empty, sortable = false }) {
         {finalRows?.map((r, i) => {
           const provisional = anyGraduated && (r.rounds_played ?? 0) < 10;
           const rank = sortable ? r.ratingRank : i + 1;
+          const slug = r.bottles?.slug;
+          // Whole row is tappable to /bottle/:slug when we have one (only the
+          // Leaderboard query selects slug). Sort-header clicks live in the
+          // separate .colHeaderRow sibling above, never inside a .row, so
+          // there's no click-bubbling conflict to guard against here.
+          const RowTag = slug ? Link : "div";
+          const rowProps = slug ? { to: `/bottle/${slug}` } : {};
           return (
-            <div key={i} className="row">
+            <RowTag key={i} className="row" {...rowProps}>
               <span style={S.rowRank}>{rank}</span>
               <span style={S.rowName}>
                 {r.bottles?.name}
@@ -636,7 +615,7 @@ function Board({ title, rows, empty, sortable = false }) {
               {provisional && (
                 <span style={S.rowRoundsProvisional}>provisional</span>
               )}
-            </div>
+            </RowTag>
           );
         })}
       </div>
@@ -770,6 +749,9 @@ const CSS = `
 .pourBtn:hover { transform: translateY(-2px); }
 .row { display: flex; align-items: baseline; gap: 10px; padding: 10px 18px; border-bottom: 1px solid rgba(42,27,12,0.15); font-size: 14px; text-align: left; }
 .row:nth-child(odd) { background: rgba(42,27,12,0.03); }
+a.row { text-decoration: none; color: inherit; cursor: pointer; }
+a.row:hover { background: rgba(232,180,90,0.18); }
+a.row:focus-visible { outline: 2px solid #E8B45A; outline-offset: -2px; }
 .field { padding: 9px 12px; font-family: Georgia, serif; font-size: 13px; background: #FFF9EC; border: 1px solid #8A6A3A; color: #2A1B0C; }
 .delta { font-size: 14px; font-weight: 700; animation: pop .3s ease; }
 @keyframes pop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
