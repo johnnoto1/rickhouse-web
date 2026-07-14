@@ -5,7 +5,7 @@ import { supabase } from "./supabaseClient";
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 
-// Street value: secondary market when available, else MSRP. Null when neither is set.
+// Effective price: secondary market value when available, else MSRP. Null when neither is set.
 const effectivePrice = (b) => b.secondary_value ?? b.msrp_usd ?? null;
 const isFallback = (b) => b.secondary_value == null && b.msrp_usd != null;
 
@@ -189,7 +189,7 @@ function Shelf({ userId }) {
               </div>
               <div>
                 <div className="text-amber-100 font-bold text-xl">{money(totalStreetValue)}</div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Street value</div>
+                <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Secondary value</div>
               </div>
               <div>
                 <div className="text-amber-100 font-bold text-xl">

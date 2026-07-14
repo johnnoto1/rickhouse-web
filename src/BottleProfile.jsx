@@ -11,8 +11,8 @@ const fmtDate = (d) =>
 
 const fmtProof = (p) => (Number.isInteger(p) ? String(p) : p.toFixed(1));
 
-// Street value: secondary market when available, else MSRP (same fallback
-// rule as the leaderboard and TradeCalculator's effectivePrice).
+// Effective price: secondary market value when available, else MSRP (same
+// fallback rule as the leaderboard and TradeCalculator's effectivePrice).
 const effectivePrice = (b) => b.secondary_value ?? b.msrp_usd ?? null;
 const isFallback = (b) => b.secondary_value == null && b.msrp_usd != null;
 

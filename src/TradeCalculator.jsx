@@ -259,10 +259,10 @@ export default function TradeCalculator() {
                             )} MSRP`}
                         {" · "}
                         {streetDiff === 0
-                          ? "street even"
+                          ? "secondary even"
                           : `you ${streetDiff > 0 ? "gain" : "give up"} ${money(
                               Math.abs(streetDiff)
-                            )} street`}
+                            )} secondary`}
                       </>
                     ) : (
                       <>
@@ -345,7 +345,7 @@ export default function TradeCalculator() {
                               <>
                                 <span>
                                   {hasSecondary
-                                    ? `MSRP ${money(b.msrp)} · Street ${money(b.secondary_value)}`
+                                    ? `MSRP ${money(b.msrp)} · Secondary ${money(b.secondary_value)}`
                                     : `${money(b.msrp)} MSRP`}
                                 </span>
                                 <span
@@ -488,7 +488,7 @@ export default function TradeCalculator() {
                           }
                         >
                           {hasSecondary
-                            ? `${money(b.msrp)} MSRP · ${money(b.secondary_value)} street`
+                            ? `${money(b.msrp)} MSRP · ${money(b.secondary_value)} secondary`
                             : money(b.msrp)}
                           {" · "}
                           {r.toFixed(1)} ELO/$

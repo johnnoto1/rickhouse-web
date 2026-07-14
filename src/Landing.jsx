@@ -114,7 +114,7 @@ export default function Landing() {
           <div className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-5 sm:p-6 flex flex-col">
             <h2 className="font-serif text-amber-300 text-xl">Your Collection Ranked</h2>
             <p className="mt-2 text-amber-100/80 text-sm flex-1">
-              Plug in your bottles, see total street value and how the community rates what you own.
+              Plug in your bottles, see total secondary value and how the community rates what you own.
             </p>
             <Link
               to="/collection"
@@ -127,7 +127,7 @@ export default function Landing() {
           <div className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-5 sm:p-6 flex flex-col">
             <h2 className="font-serif text-amber-300 text-xl">Trade Calculator</h2>
             <p className="mt-2 text-amber-100/80 text-sm flex-1">
-              Convex-value trade evaluation built on honest street pricing.
+              Convex-value trade evaluation built on honest secondary pricing.
             </p>
             <Link
               to="/trade"
