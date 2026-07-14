@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
+import ContributionGate from "./ContributionGate.jsx";
 
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -22,11 +23,15 @@ export default function BottleProfile() {
     (async () => {
       // rating_snapshots is only readable by `authenticated` (anonymous
       // sign-ins ride that role) — bootstrap a session the same way
-      // Collection.jsx does before touching it.
-      const { data: sessionData } = await supabase.auth.getSession();
+      // Collection.jsx does before touching it. Kept in state (not just
+      // ensured-to-exist) since the contribution entry points need to know
+      // whether this session is anonymous.
+      let { data: sessionData } = await supabase.auth.getSession();
       if (!sessionData.session) {
-        await supabase.auth.signInAnonymously();
+        const signInResult = await supabase.auth.signInAnonymously();
+        sessionData = { session: signInResult.data.session };
       }
+      const session = sessionData.session;
 
       const { data: bottle } = await supabase
         .from("bottles")
@@ -82,6 +87,7 @@ export default function BottleProfile() {
 
       setState({
         status: "ok",
+        session,
         bottle,
         rating: ratingRow ?? { rating: 1500, wins: 0, losses: 0, rounds_played: 0 },
         snapshots: snapshots ?? [],
@@ -156,7 +162,8 @@ function Page({ children }) {
   );
 }
 
-function Profile({ bottle, rating, snapshots, value, price, priceTag, parent, batches }) {
+function Profile({ session, bottle, rating, snapshots, value, price, priceTag, parent, batches }) {
+  const [openPanel, setOpenPanel] = useState(null); // null | "edit" | "price"
   const { rankNow, rankTrend } = useMemo(() => computeRankTrend(snapshots), [snapshots]);
 
   const proofDisplay =
@@ -251,16 +258,290 @@ function Profile({ bottle, rating, snapshots, value, price, priceTag, parent, ba
               <div className="text-[10px] uppercase tracking-widest text-stone-500 mt-1">
                 {s.label}
               </div>
+              {s.label === "Price" && (
+                <button
+                  type="button"
+                  onClick={() => setOpenPanel(openPanel === "price" ? null : "price")}
+                  className="text-[10px] text-amber-700 hover:text-amber-900 underline underline-offset-2 mt-1 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+                >
+                  Report a price
+                </button>
+              )}
             </div>
             );
           })}
         </div>
       </section>
 
+      {(openPanel === "edit" || openPanel === "price") && (
+        <section className="bg-amber-50 rounded-md border border-amber-200 shadow-md p-4 sm:p-5 mb-5">
+          <ContributionGate session={session} onDone={() => setOpenPanel(null)}>
+            {openPanel === "edit" ? (
+              <SuggestEditForm
+                bottle={bottle}
+                userId={session.user.id}
+                onDone={() => setOpenPanel(null)}
+              />
+            ) : (
+              <ReportPriceForm
+                bottle={bottle}
+                userId={session.user.id}
+                onDone={() => setOpenPanel(null)}
+              />
+            )}
+          </ContributionGate>
+        </section>
+      )}
+
+      <div className="text-center -mt-2 mb-5">
+        <button
+          type="button"
+          onClick={() => setOpenPanel(openPanel === "edit" ? null : "edit")}
+          className="text-xs text-amber-600/80 hover:text-amber-400 underline underline-offset-2 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+        >
+          Suggest an edit
+        </button>
+      </div>
+
       {batches.length > 0 && <BatchesTable batches={batches} />}
 
       <RatingHistory snapshots={snapshots} />
     </>
+  );
+}
+
+const EDIT_FIELDS = [
+  { key: "name", label: "Name" },
+  { key: "distillery", label: "Distillery" },
+  { key: "proof", label: "Proof" },
+  { key: "proof_note", label: "Proof note" },
+  { key: "msrp_usd", label: "MSRP" },
+];
+
+// Field picker is whitelist-only — the same 5 fields the migration
+// documents (never initial_rating, secondary_value, status, parent_id).
+// source_note is required (also enforced by a DB check constraint), with
+// a placeholder nudging toward a real citation rather than "trust me".
+function SuggestEditForm({ bottle, userId, onDone }) {
+  const [field, setField] = useState(EDIT_FIELDS[0].key);
+  const [proposedValue, setProposedValue] = useState("");
+  const [sourceNote, setSourceNote] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  const currentValue = bottle[field];
+  const currentDisplay = currentValue == null || currentValue === "" ? "—" : String(currentValue);
+
+  const submit = async () => {
+    if (!proposedValue.trim()) {
+      setError("Enter a proposed value.");
+      return;
+    }
+    if (!sourceNote.trim()) {
+      setError("Source is required.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    const { error: err } = await supabase.from("proposals").insert({
+      user_id: userId,
+      type: "edit_field",
+      bottle_id: bottle.id,
+      payload: { field, current_value: currentValue ?? null, proposed_value: proposedValue.trim() },
+      source_note: sourceNote.trim(),
+    });
+    setSubmitting(false);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return (
+      <div className="text-center py-2">
+        <p className="text-stone-700 text-sm">Thanks — edits are reviewed before they land.</p>
+        <button
+          type="button"
+          onClick={onDone}
+          className="mt-3 text-xs uppercase tracking-widest text-amber-800 border border-amber-700/60 rounded px-4 py-2 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h3 className="font-serif text-stone-900 text-lg mb-3">Suggest an edit</h3>
+
+      <label className="block text-xs uppercase tracking-widest text-stone-500 mb-1">Field</label>
+      <select
+        value={field}
+        onChange={(e) => {
+          setField(e.target.value);
+          setProposedValue("");
+        }}
+        className="w-full bg-[#FFF9EC] border border-[#8A6A3A] rounded-md px-3 py-2 text-stone-900 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+      >
+        {EDIT_FIELDS.map((f) => (
+          <option key={f.key} value={f.key}>
+            {f.label}
+          </option>
+        ))}
+      </select>
+
+      <div className="text-xs uppercase tracking-widest text-stone-500 mb-1">Current value</div>
+      <div className="text-stone-800 font-semibold mb-3">{currentDisplay}</div>
+
+      <label className="block text-xs uppercase tracking-widest text-stone-500 mb-1">Proposed value</label>
+      <input
+        value={proposedValue}
+        onChange={(e) => setProposedValue(e.target.value)}
+        className="w-full bg-[#FFF9EC] border border-[#8A6A3A] rounded-md px-3 py-2 text-stone-900 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+      />
+
+      <label className="block text-xs uppercase tracking-widest text-stone-500 mb-1">Source *</label>
+      <input
+        value={sourceNote}
+        onChange={(e) => setSourceNote(e.target.value)}
+        placeholder="e.g. per the label / distillery release page"
+        className="w-full bg-[#FFF9EC] border border-[#8A6A3A] rounded-md px-3 py-2 text-stone-900 mb-1 focus:outline-none focus:ring-2 focus:ring-amber-500"
+      />
+
+      {error && <p className="text-red-700 text-sm mt-2">{error}</p>}
+
+      <div className="flex items-center gap-3 mt-3">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={submitting}
+          className="py-2 px-6 rounded-md bg-amber-700 text-amber-50 font-semibold hover:bg-amber-600 disabled:opacity-50 text-sm uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500"
+        >
+          {submitting ? "Submitting…" : "Submit for review"}
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          className="text-xs uppercase tracking-widest text-stone-500 hover:text-stone-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+const PRICE_CONTEXTS = [
+  { key: "paid", label: "I paid this" },
+  { key: "seen", label: "Seen for sale" },
+  { key: "trade", label: "Trade value" },
+];
+
+function ReportPriceForm({ bottle, userId, onDone }) {
+  const [price, setPrice] = useState("");
+  const [context, setContext] = useState("paid");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  const submit = async () => {
+    const n = Number(price);
+    if (!price.trim() || !(n > 0)) {
+      setError("Enter a valid price.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    const { error: err } = await supabase.from("proposals").insert({
+      user_id: userId,
+      type: "price_report",
+      bottle_id: bottle.id,
+      payload: { price: n, context },
+    });
+    setSubmitting(false);
+    if (err) {
+      setError(err.message);
+      return;
+    }
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return (
+      <div className="text-center py-2">
+        <p className="text-stone-700 text-sm">Thanks — reports are reviewed before they land.</p>
+        <button
+          type="button"
+          onClick={onDone}
+          className="mt-3 text-xs uppercase tracking-widest text-amber-800 border border-amber-700/60 rounded px-4 py-2 hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h3 className="font-serif text-stone-900 text-lg mb-3">Report a price</h3>
+
+      <label className="block text-xs uppercase tracking-widest text-stone-500 mb-1">Price ($)</label>
+      <input
+        value={price}
+        onChange={(e) => setPrice(e.target.value)}
+        type="number"
+        step="0.01"
+        min="0"
+        className="w-full bg-[#FFF9EC] border border-[#8A6A3A] rounded-md px-3 py-2 text-stone-900 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+      />
+
+      <label className="block text-xs uppercase tracking-widest text-stone-500 mb-1">Context</label>
+      <div className="flex gap-2 mb-3">
+        {PRICE_CONTEXTS.map((c) => (
+          <button
+            key={c.key}
+            type="button"
+            onClick={() => setContext(c.key)}
+            className={
+              "px-3 py-1.5 rounded-full border text-xs uppercase tracking-wider focus:outline-none focus:ring-2 focus:ring-amber-500 " +
+              (context === c.key
+                ? "bg-amber-700 border-amber-600 text-amber-50 font-semibold"
+                : "border-stone-400 text-stone-500 hover:text-stone-800")
+            }
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      <p className="text-xs text-stone-500 italic mb-3">
+        Real transactions only — reports are cross-checked.
+      </p>
+
+      {error && <p className="text-red-700 text-sm mb-2">{error}</p>}
+
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={submitting}
+          className="py-2 px-6 rounded-md bg-amber-700 text-amber-50 font-semibold hover:bg-amber-600 disabled:opacity-50 text-sm uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500"
+        >
+          {submitting ? "Submitting…" : "Submit report"}
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          className="text-xs uppercase tracking-widest text-stone-500 hover:text-stone-800"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
   );
 }
 

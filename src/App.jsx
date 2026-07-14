@@ -5,6 +5,7 @@ import TradeCalculator from "./TradeCalculator";
 import Collection from "./Collection";
 import Landing from "./Landing";
 import BottleProfile from "./BottleProfile";
+import AddEmail from "./AddEmail";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 
 const ROLES = [
@@ -348,147 +349,12 @@ function Game({ session }) {
 
       {view === "board" && <Leaderboard />}
       {view === "mine" && <MyBoard userId={session.user.id} />}
-      {view === "upgrade" && <AddEmail onDone={() => goView("rank")} />}
+      {view === "upgrade" && (
+        <main style={S.main}>
+          <AddEmail onDone={() => goView("rank")} />
+        </main>
+      )}
     </>
-  );
-}
-
-// ---------------- Auth upgrade (anonymous → email) ----------------
-// Two explicit paths:
-//   "Create account"       → updateUser({ email }) keeps vote history
-//   "Already have account" → signInWithOtp({ email }) abandons anon session
-function AddEmail({ onDone }) {
-  const [path, setPath] = useState("create"); // "create" | "signin"
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [err, setErr] = useState("");
-  // When create path hits "email already registered", offer inline switch
-  const [emailConflict, setEmailConflict] = useState(false);
-
-  const switchPath = (p) => {
-    setPath(p);
-    setErr("");
-    setSent(false);
-    setEmailConflict(false);
-  };
-
-  const send = async () => {
-    setErr("");
-    setEmailConflict(false);
-    if (path === "create") {
-      // updateUser links email to the current anon session — user_id stays the same.
-      const { error } = await supabase.auth.updateUser(
-        { email },
-        { emailRedirectTo: window.location.origin },
-      );
-      if (error) {
-        if (error.code === "email_exists" || error.message?.includes("already been registered")) {
-          setEmailConflict(true);
-        } else {
-          setErr(error.message);
-        }
-      } else {
-        setSent(true);
-      }
-    } else {
-      // signInWithOtp intentionally abandons the anonymous session.
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.origin },
-      });
-      if (error) setErr(error.message);
-      else setSent(true);
-    }
-  };
-
-  const PathToggle = () => (
-    <div style={{ display: "flex", borderBottom: "2px solid #2A1B0C", marginBottom: 0 }}>
-      {[
-        ["create", "NEW ACCOUNT"],
-        ["signin", "SIGN IN"],
-      ].map(([p, label]) => (
-        <button
-          key={p}
-          onClick={() => switchPath(p)}
-          style={{
-            flex: 1, padding: "11px 0",
-            background: path === p ? "#E8B45A" : "transparent",
-            color: path === p ? "#2A1B0C" : "#7A5A2E",
-            border: "none", borderRight: p === "create" ? "1px solid #2A1B0C" : "none",
-            fontFamily: "Georgia, serif", fontSize: 11, letterSpacing: "0.25em",
-            fontWeight: 700, cursor: "pointer",
-          }}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-
-  return (
-    <main style={S.main}>
-      <div style={{ ...S.panel, maxWidth: 420, textAlign: "center" }}>
-        <div style={S.panelHead}>
-          {path === "create" ? "SAVE YOUR PROGRESS" : "WELCOME BACK"}
-        </div>
-
-        <PathToggle />
-
-        {sent ? (
-          <div style={{ padding: 24 }}>
-            <p style={{ marginTop: 0 }}>
-              {path === "create"
-                ? "Check your email — click the link to lock in your voting history. Your rounds stay with you."
-                : "Check your email for your sign-in link."}
-            </p>
-            <button className="tab" style={{ marginTop: 8 }} onClick={onDone}>
-              ← Back to ranking
-            </button>
-          </div>
-        ) : (
-          <div style={{ padding: 24 }}>
-            {path === "create" ? (
-              <p style={{ marginTop: 0, fontSize: 14 }}>
-                Add an email to keep your board across devices. Your existing
-                rounds stay with you — keeps your votes and your collection.
-              </p>
-            ) : (
-              <p style={{ marginTop: 0, fontSize: 14 }}>
-                Send yourself a magic link to sign in to your existing account.
-              </p>
-            )}
-
-            <input
-              className="field"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && send()}
-              style={{ width: "100%", boxSizing: "border-box" }}
-            />
-
-            {err && <p style={{ color: "#A03325", fontSize: 13, marginBottom: 0 }}>{err}</p>}
-
-            {emailConflict && (
-              <p style={{ color: "#A03325", fontSize: 13, marginBottom: 0 }}>
-                That email is already registered.{" "}
-                <span
-                  style={{ color: "#B08040", cursor: "pointer", textDecoration: "underline" }}
-                  onClick={() => switchPath("signin")}
-                >
-                  Sign in instead →
-                </span>
-              </p>
-            )}
-
-            <button className="pourBtn" style={{ marginTop: 14 }} onClick={send}>
-              {path === "create" ? "SAVE MY BOARD" : "SEND SIGN-IN LINK"}
-            </button>
-          </div>
-        )}
-      </div>
-    </main>
   );
 }
 
