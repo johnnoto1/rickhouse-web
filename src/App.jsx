@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
@@ -10,6 +10,8 @@ const ROLES = [
   { key: "trade", label: "TRADE" },
   { key: "cut", label: "CUT" },
 ];
+
+const fmtMoney = (n) => "$" + Math.round(n).toLocaleString("en-US");
 
 export default function App() {
   return (
@@ -455,12 +457,17 @@ function Leaderboard() {
   useEffect(() => {
     supabase
       .from("bottle_ratings")
-      .select("rating, wins, losses, rounds_played, bottles(name, distillery)")
+      .select("rating, wins, losses, rounds_played, bottles(name, distillery, msrp_usd, secondary_value)")
       .order("rating", { ascending: false })
       .limit(200)
-      .then(({ data }) => setRows(data ?? []));
+      .then(({ data }) =>
+        // ratingRank is fixed at fetch time (rows already arrive rating-desc)
+        // so the # column stays pinned to rating order no matter how the
+        // table is subsequently sorted client-side.
+        setRows((data ?? []).map((r, i) => ({ ...r, ratingRank: i + 1 })))
+      );
   }, []);
-  return <Board title="BARREL RANKINGS" rows={rows} />;
+  return <Board title="BARREL RANKINGS" rows={rows} sortable />;
 }
 
 function MyBoard({ userId }) {
@@ -476,37 +483,156 @@ function MyBoard({ userId }) {
   return <Board title="YOUR SHELF" rows={rows} empty="Judge some pours first — your personal board builds from your own rounds." />;
 }
 
-function Board({ title, rows, empty }) {
-  const anyGraduated = rows?.some((r) => (r.rounds_played ?? 0) >= 10) ?? false;
+// Per-bottle effective price: secondary market when available, else MSRP
+// (matches the fallback rule in TradeCalculator's effectivePrice).
+function Board({ title, rows, empty, sortable = false }) {
+  const [sortKey, setSortKey] = useState("rating");
+  const [sortDir, setSortDir] = useState("desc");
+
+  const clickSort = (key) => {
+    if (sortKey === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    else {
+      setSortKey(key);
+      setSortDir("desc");
+    }
+  };
+
+  // Price + convex value-per-dollar, computed once per fetch — independent
+  // of the active sort. VALUE = ((rating-1200)/100)^2.5 / price, normalized
+  // within this fetched set so the best-value bottle displays exactly 100.
+  const computedRows = useMemo(() => {
+    if (!rows || !sortable) return rows;
+    const withPrice = rows.map((r) => {
+      const secondary = r.bottles?.secondary_value ?? null;
+      const msrp = r.bottles?.msrp_usd ?? null;
+      const price = secondary ?? msrp;
+      return { ...r, price, priceIsFallback: secondary == null && msrp != null };
+    });
+    const raws = withPrice.map((r) =>
+      r.rating > 1200 && r.price != null && r.price > 0
+        ? Math.pow((r.rating - 1200) / 100, 2.5) / r.price
+        : null
+    );
+    const maxRaw = raws.reduce((m, v) => (v != null && v > m ? v : m), 0);
+    return withPrice.map((r, i) => ({
+      ...r,
+      value:
+        raws[i] != null && maxRaw > 0
+          ? Math.round((raws[i] / maxRaw) * 100)
+          : null,
+    }));
+  }, [rows, sortable]);
+
+  // Null price/value always sorts last, in both asc and desc.
+  const displayRows = useMemo(() => {
+    if (!computedRows || !sortable) return computedRows;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const arr = [...computedRows];
+    if (sortKey === "rating") {
+      arr.sort((a, b) => dir * (a.rating - b.rating));
+    } else if (sortKey === "price") {
+      arr.sort((a, b) => {
+        if (a.price == null && b.price == null) return 0;
+        if (a.price == null) return 1;
+        if (b.price == null) return -1;
+        return dir * (a.price - b.price);
+      });
+    } else if (sortKey === "value") {
+      arr.sort((a, b) => {
+        if (a.value == null && b.value == null) return 0;
+        if (a.value == null) return 1;
+        if (b.value == null) return -1;
+        return dir * (a.value - b.value);
+      });
+    }
+    return arr;
+  }, [computedRows, sortKey, sortDir, sortable]);
+
+  const finalRows = sortable ? displayRows : rows;
+  const anyGraduated = finalRows?.some((r) => (r.rounds_played ?? 0) >= 10) ?? false;
+
+  const hdrStyle = (key, base) => ({
+    ...base,
+    color: sortKey === key ? "#A6521B" : "#7A5A2E",
+  });
+  const arrow = (key) => (sortKey === key ? (sortDir === "desc" ? " ▾" : " ▴") : "");
+
   return (
     <main style={S.main}>
       <div style={S.panel}>
         <div style={S.panelHead}>{title}</div>
-        {rows === null && <p style={{ padding: 18 }}>Loading…</p>}
-        {rows?.length === 0 && (
+        {finalRows === null && <p style={{ padding: 18 }}>Loading…</p>}
+        {finalRows?.length === 0 && (
           <p style={{ padding: 18, fontSize: 14 }}>
             {empty ?? "No rated bottles yet."}
           </p>
         )}
-        {rows?.length > 0 && (
+        {finalRows?.length > 0 && (
           <div style={S.colHeaderRow}>
             <span style={S.colHdrRank}>#</span>
             <span style={S.colHdrName}>BOTTLE</span>
-            <span style={S.colHdrRecord}>W–L</span>
-            <span style={S.colHdrRating}>RATING</span>
+            <span style={S.colHdrRecord} className="hideMobile">W–L</span>
+            {sortable ? (
+              <button
+                type="button"
+                className="sortHdr"
+                style={hdrStyle("rating", S.colHdrRating)}
+                onClick={() => clickSort("rating")}
+              >
+                RATING{arrow("rating")}
+              </button>
+            ) : (
+              <span style={S.colHdrRating}>RATING</span>
+            )}
+            {sortable && (
+              <button
+                type="button"
+                className="sortHdr hideMobile"
+                style={hdrStyle("price", S.colHdrPrice)}
+                onClick={() => clickSort("price")}
+              >
+                PRICE{arrow("price")}
+              </button>
+            )}
+            {sortable && (
+              <button
+                type="button"
+                className="sortHdr"
+                style={hdrStyle("value", S.colHdrValue)}
+                onClick={() => clickSort("value")}
+              >
+                VALUE{arrow("value")}
+              </button>
+            )}
           </div>
         )}
-        {rows?.map((r, i) => {
+        {finalRows?.map((r, i) => {
           const provisional = anyGraduated && (r.rounds_played ?? 0) < 10;
+          const rank = sortable ? r.ratingRank : i + 1;
           return (
             <div key={i} className="row">
-              <span style={S.rowRank}>{i + 1}</span>
+              <span style={S.rowRank}>{rank}</span>
               <span style={S.rowName}>
                 {r.bottles?.name}
                 <span style={S.rowDist}> {r.bottles?.distillery}</span>
               </span>
-              <span style={S.rowRecord}>{r.wins}–{r.losses}</span>
+              <span style={S.rowRecord} className="hideMobile">{r.wins}–{r.losses}</span>
               <span style={S.rowRating}>{Math.round(r.rating)}</span>
+              {sortable && (
+                <span style={S.rowPrice} className="hideMobile">
+                  {r.price != null ? (
+                    <>
+                      {fmtMoney(r.price)}
+                      {r.priceIsFallback && <span style={S.priceMsrpTag}>MSRP</span>}
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </span>
+              )}
+              {sortable && (
+                <span style={S.rowValue}>{r.value != null ? r.value : "—"}</span>
+              )}
               {provisional && (
                 <span style={S.rowRoundsProvisional}>provisional</span>
               )}
@@ -594,11 +720,17 @@ const S = {
     padding: "14px 18px", borderBottom: "2px solid #2A1B0C",
     fontSize: 13, letterSpacing: "0.3em", fontWeight: 700,
   },
-  rowRank: { width: 34, fontWeight: 700, color: "#A6521B" },
-  rowName: { flex: 1, fontWeight: 600 },
+  rowRank: { width: 30, fontWeight: 700, color: "#A6521B" },
+  rowName: { flex: 1, minWidth: 0, fontWeight: 600 },
   rowDist: { fontWeight: 400, fontSize: 11, color: "#7A5A2E", marginLeft: 6 },
-  rowRecord: { width: 70, textAlign: "right", fontSize: 12, color: "#7A5A2E" },
-  rowRating: { width: 64, textAlign: "right", fontWeight: 700 },
+  rowRecord: { width: 64, textAlign: "right", fontSize: 12, color: "#7A5A2E" },
+  rowRating: { width: 58, textAlign: "right", fontWeight: 700 },
+  rowPrice: { width: 72, textAlign: "right", fontSize: 13 },
+  rowValue: { width: 50, textAlign: "right", fontWeight: 700 },
+  priceMsrpTag: {
+    fontSize: 9, color: "#B08040", marginLeft: 4,
+    letterSpacing: "0.05em", textTransform: "uppercase",
+  },
   rowRoundsProvisional: { fontSize: 11, color: "#B08040", fontStyle: "italic" },
   colHeaderRow: {
     display: "flex", alignItems: "baseline", gap: 10,
@@ -606,10 +738,12 @@ const S = {
     fontSize: 9, letterSpacing: "0.2em", color: "#7A5A2E", fontWeight: 700,
     textTransform: "uppercase",
   },
-  colHdrRank: { width: 34 },
+  colHdrRank: { width: 30 },
   colHdrName: { flex: 1 },
-  colHdrRecord: { width: 70, textAlign: "right" },
-  colHdrRating: { width: 64, textAlign: "right" },
+  colHdrRecord: { width: 64, textAlign: "right" },
+  colHdrRating: { width: 58, textAlign: "right" },
+  colHdrPrice: { width: 72, textAlign: "right" },
+  colHdrValue: { width: 50, textAlign: "right" },
   footer: { textAlign: "center", padding: "18px 10px 24px", fontSize: 10, letterSpacing: "0.35em", color: "#7A5A2E" },
 };
 
@@ -617,7 +751,10 @@ const CSS = `
 .tab { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 8px 20px; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.25em; cursor: pointer; transition: all .15s; text-decoration: none; display: inline-block; }
 .tab:hover { border-color: #B08040; color: #E8B45A; }
 .tabOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; font-weight: 700; }
-.tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+.tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+.sortHdr { background: none; border: none; padding: 0; margin: 0; font-family: inherit; font-size: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.sortHdr:hover { color: #E8B45A !important; }
+@media (max-width: 500px) { .hideMobile { display: none; } }
 .label { background: #F1E6CE; box-shadow: 0 10px 30px rgba(0,0,0,0.45); transition: transform .18s, box-shadow .18s; }
 .label:hover { transform: translateY(-3px); }
 .label-keep  { box-shadow: 0 0 0 3px #3E7C4F, 0 10px 30px rgba(0,0,0,0.45); }
