@@ -3,6 +3,8 @@ import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import medalsHeroWebp from "./assets/medals-hero.webp";
 import medalsHeroJpg from "./assets/medals-hero-fallback.jpg";
+import medalsHeroMobileWebp from "./assets/medals-hero-mobile.webp";
+import medalsHeroMobileJpg from "./assets/medals-hero-mobile-fallback.jpg";
 
 export default function Landing() {
   const [rows, setRows] = useState(null);
@@ -65,79 +67,71 @@ export default function Landing() {
                 Start Ranking
               </Link>
             </div>
+
+            {/* Editorial photo, filling the dead space below the CTA stack.
+                A real content image now (not a backdrop) — shown at every
+                width, just with a size-appropriate derivation: the mobile
+                <source> (700x326, ~20KB) below sm, the desktop one
+                (1200x558, ~52KB) at sm+ and up. Source photo has correct,
+                legible medal engravings, so no blur/softening is applied —
+                the medals render sharp. The mask-image below is a vignette
+                only (edge fade into the page background), not a legibility
+                treatment. width/height + h-auto reserve the aspect ratio so
+                this never causes layout shift while it loads. */}
+            <div className="mt-8">
+              <picture>
+                <source media="(min-width: 640px)" srcSet={medalsHeroWebp} type="image/webp" />
+                <source media="(min-width: 640px)" srcSet={medalsHeroJpg} type="image/jpeg" />
+                <source srcSet={medalsHeroMobileWebp} type="image/webp" />
+                <img
+                  src={medalsHeroMobileJpg}
+                  alt="Three Glencairn glasses fitted with gold, silver, and bronze medals, resting on a barrel-wood flight board"
+                  width={1200}
+                  height={558}
+                  loading="eager"
+                  className="w-full h-auto max-w-md mx-auto lg:mx-0"
+                  style={{
+                    maskImage: "radial-gradient(ellipse at center, black 45%, transparent 100%)",
+                    WebkitMaskImage: "radial-gradient(ellipse at center, black 45%, transparent 100%)",
+                  }}
+                />
+              </picture>
+            </div>
           </div>
 
-          {/* Hero right — live top-10 preview, with the medal-glasses photo
-              as an atmospheric backdrop behind it. Desktop/tablet (lg+)
-              only — see the picture's hidden lg:block below for why. */}
-          <div className="min-w-0 relative">
-            {/* Backdrop photo: absolutely positioned so it never affects
-                layout (no CLS risk from its own insertion), oversized
-                relative to the panel so it peeks out at the edges, and
-                radial-masked so every edge fades to transparent — no
-                rectangle boundary against the page's #17100A background.
-                width/height are the source's real intrinsic size so the
-                browser can reserve aspect ratio during decode.
-
-                Both <source> tags are media-gated to lg (1024px+): below
-                that, neither matches, so the browser falls through to the
-                <img>'s own src — a ~60-byte inline data URI, not the real
-                photo. A CSS-only `hidden lg:block` still lets the browser
-                fetch the full image bytes on mobile even though it's never
-                painted; gating at the <picture>/<source> level is what
-                actually keeps mobile's network transfer at zero for this
-                image, not just its rendered pixels. */}
-            <picture>
-              <source media="(min-width: 1024px)" srcSet={medalsHeroWebp} type="image/webp" />
-              <source media="(min-width: 1024px)" srcSet={medalsHeroJpg} type="image/jpeg" />
-              <img
-                src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBTAA7"
-                alt=""
-                aria-hidden="true"
-                width={1200}
-                height={1200}
-                loading="eager"
-                className="hidden lg:block absolute -top-10 -right-10 w-[120%] max-w-none h-auto select-none pointer-events-none"
-                style={{
-                  maskImage: "radial-gradient(circle at 60% 40%, black 35%, transparent 72%)",
-                  WebkitMaskImage: "radial-gradient(circle at 60% 40%, black 35%, transparent 72%)",
-                }}
-              />
-            </picture>
-
-            <div
-              className="min-w-0 relative bg-[#F1E6CE] border border-[#8A6A3A]"
-              style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
-            >
-              <div className="px-[18px] py-[14px] border-b-2 border-[#2A1B0C] text-[13px] tracking-[0.3em] font-bold text-[#2A1B0C]">
-                TOP OF THE BOARD
-              </div>
-              <div>
-                {rows === null && <div className="h-[420px]" />}
-                {rows?.length === 0 && (
-                  <p className="px-[18px] py-6 text-[14px] text-[#2A1B0C]">
-                    No ratings yet — be the first to vote.
-                  </p>
-                )}
-                {rows?.map((r, i) => (
-                  <div
-                    key={i}
-                    className="flex items-baseline gap-[10px] px-[18px] py-[10px] text-[14px] text-left border-b border-[rgba(42,27,12,0.15)]"
-                    style={i % 2 === 0 ? { background: "rgba(42,27,12,0.03)" } : undefined}
-                  >
-                    <span className="w-[26px] shrink-0 font-bold text-[#A6521B]">{i + 1}</span>
-                    <span className="flex-1 min-w-0 font-semibold text-[#2A1B0C] truncate">
-                      {r.bottles?.name}
-                      <span className="font-normal text-[11px] text-[#7A5A2E] ml-1.5">
-                        {r.bottles?.distillery}
-                      </span>
+          {/* Hero right — live top-10 preview */}
+          <div
+            className="min-w-0 bg-[#F1E6CE] border border-[#8A6A3A]"
+            style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
+          >
+            <div className="px-[18px] py-[14px] border-b-2 border-[#2A1B0C] text-[13px] tracking-[0.3em] font-bold text-[#2A1B0C]">
+              TOP OF THE BOARD
+            </div>
+            <div>
+              {rows === null && <div className="h-[420px]" />}
+              {rows?.length === 0 && (
+                <p className="px-[18px] py-6 text-[14px] text-[#2A1B0C]">
+                  No ratings yet — be the first to vote.
+                </p>
+              )}
+              {rows?.map((r, i) => (
+                <div
+                  key={i}
+                  className="flex items-baseline gap-[10px] px-[18px] py-[10px] text-[14px] text-left border-b border-[rgba(42,27,12,0.15)]"
+                  style={i % 2 === 0 ? { background: "rgba(42,27,12,0.03)" } : undefined}
+                >
+                  <span className="w-[26px] shrink-0 font-bold text-[#A6521B]">{i + 1}</span>
+                  <span className="flex-1 min-w-0 font-semibold text-[#2A1B0C] truncate">
+                    {r.bottles?.name}
+                    <span className="font-normal text-[11px] text-[#7A5A2E] ml-1.5">
+                      {r.bottles?.distillery}
                     </span>
-                    <span className="w-[56px] shrink-0 text-right font-bold text-[#2A1B0C]">
-                      {Math.round(r.rating)}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  </span>
+                  <span className="w-[56px] shrink-0 text-right font-bold text-[#2A1B0C]">
+                    {Math.round(r.rating)}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
