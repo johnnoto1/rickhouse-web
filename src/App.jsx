@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
 import Collection from "./Collection";
@@ -23,6 +23,10 @@ export default function App() {
       <Route path="/trade" element={<TradeCalculator />} />
       <Route path="/collection" element={<Collection />} />
       <Route path="/bottle/:slug" element={<BottleProfile />} />
+      {/* My Board (personal ratings view) was removed from the nav — this
+          keeps any bookmarked/shared /board links landing somewhere real
+          instead of a blank or 404'd view. */}
+      <Route path="/board" element={<Navigate to="/leaderboard" replace />} />
       <Route path="/*" element={<RickhouseApp />} />
     </Routes>
   );
@@ -31,8 +35,8 @@ export default function App() {
 // URL <-> internal tab-view mapping. Kept as a plain lookup rather than
 // separate <Route> entries so switching tabs never remounts Game (which
 // would re-bootstrap the anon session and refetch the current deal).
-const PATH_VIEW = { "/rank": "rank", "/leaderboard": "board", "/board": "mine" };
-const VIEW_PATH = { rank: "/rank", board: "/leaderboard", mine: "/board" };
+const PATH_VIEW = { "/rank": "rank", "/leaderboard": "board" };
+const VIEW_PATH = { rank: "/rank", board: "/leaderboard" };
 
 // ---------------- Root app ----------------
 function RickhouseApp() {
@@ -72,9 +76,9 @@ function RickhouseApp() {
 function Game({ session }) {
   const location = useLocation();
   const navigate = useNavigate();
-  // Seeded once from the URL on mount so deep links (/rank, /leaderboard,
-  // /board) land on the right tab; subsequent tab clicks just update local
-  // state + the URL, without remounting this component.
+  // Seeded once from the URL on mount so deep links (/rank, /leaderboard)
+  // land on the right tab; subsequent tab clicks just update local state +
+  // the URL, without remounting this component.
   const [view, setView] = useState(() => PATH_VIEW[location.pathname] ?? "rank");
   const goView = (key) => {
     setView(key);
@@ -228,7 +232,6 @@ function Game({ session }) {
         {[
           ["rank", "Rank"],
           ["board", "Leaderboard"],
-          ["mine", "My Board"],
         ].map(([k, label]) => (
           <button
             key={k}
@@ -238,7 +241,6 @@ function Game({ session }) {
             {label}
           </button>
         ))}
-        <Link to="/trade" className="tab">Trade</Link>
         <Link to="/collection" className="tab">Collection</Link>
         {isAnon ? (
           <button
@@ -366,7 +368,6 @@ function Game({ session }) {
       )}
 
       {view === "board" && <Leaderboard />}
-      {view === "mine" && <MyBoard userId={session.user.id} />}
       {view === "upgrade" && (
         <main style={S.main}>
           <AddEmail onDone={() => goView("rank")} />
@@ -408,19 +409,6 @@ function Leaderboard() {
     });
   }, []);
   return <Board title="BARREL RANKINGS" rows={rows} sortable />;
-}
-
-function MyBoard({ userId }) {
-  const [rows, setRows] = useState(null);
-  useEffect(() => {
-    supabase
-      .from("user_bottle_ratings")
-      .select("rating, wins, losses, bottles(name, distillery)")
-      .eq("user_id", userId)
-      .order("rating", { ascending: false })
-      .then(({ data }) => setRows(data ?? []));
-  }, [userId]);
-  return <Board title="YOUR SHELF" rows={rows} empty="Judge some pours first — your personal board builds from your own rounds." />;
 }
 
 // Per-bottle effective price: secondary market when available, else MSRP
@@ -701,7 +689,12 @@ const CSS = `
 .tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible, .batchToggle:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
 .sortHdr { background: none; border: none; padding: 0; margin: 0; font-family: inherit; font-size: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .sortHdr:hover { color: #E8B45A !important; }
-@media (max-width: 500px) { .hideMobile { display: none; } }
+@media (max-width: 500px) {
+  .hideMobile { display: none; }
+  /* Tighter than desktop so Rank/Leaderboard/Collection/Sign in all sit on
+     one row at narrow widths instead of wrapping a 4th tab to its own line. */
+  .tab { padding: 8px 11px; font-size: 11px; letter-spacing: 0.1em; }
+}
 .label { background: #F1E6CE; box-shadow: 0 10px 30px rgba(0,0,0,0.45); transition: transform .18s, box-shadow .18s; }
 .label:hover { transform: translateY(-3px); }
 .label-keep  { box-shadow: 0 0 0 3px #3E7C4F, 0 10px 30px rgba(0,0,0,0.45); }
