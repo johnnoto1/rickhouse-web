@@ -1,7 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
-import { bottleValue, tradePct, resolvePrice } from "./tradeValue.js";
+import { bottleValue, resolvePrice, tradeVerdict } from "./tradeValue.js";
+
+// Maps a tradeVerdict tier + favored side to display copy. Kept local to
+// this component (not tradeValue.js) — that module stays framework/JSX
+// agnostic, same as bottleValue/tradePct/resolvePrice already are.
+function verdictCopy(tier, favors) {
+  if (tier === 0) return { label: "Dead even", tone: "text-amber-300" };
+  if (tier === 1) return { label: "Fair trade", tone: "text-amber-300" };
+  if (tier === 2) {
+    return {
+      label: `Slight edge, in ${favors === "you" ? "your" : "their"} favor`,
+      tone: "text-amber-400",
+    };
+  }
+  return {
+    label: `Heavily in ${favors === "you" ? "your" : "their"} favor`,
+    tone: favors === "you" ? "text-emerald-400" : "text-red-400",
+  };
+}
 
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -155,20 +173,21 @@ export default function TradeCalculator() {
   const priceSum = (ids, priceFn) =>
     getBotles(ids).reduce((t, b) => t + (priceFn(b) ?? 0), 0);
 
-  const valueA = getBotles(sideA).reduce((t, b) => t + bottleValue(b.elo), 0);
-  const valueB = getBotles(sideB).reduce((t, b) => t + bottleValue(b.elo), 0);
+  // convexA/convexB: the old "pts" measure — still computed (tradeVerdict
+  // needs it for the ELO tiebreaker, and each side card still shows the
+  // total as demoted metadata), just no longer the verdict's primary axis.
+  const convexA = getBotles(sideA).reduce((t, b) => t + bottleValue(b.elo), 0);
+  const convexB = getBotles(sideB).reduce((t, b) => t + bottleValue(b.elo), 0);
   const msrpA = priceSum(sideA, (b) => b.msrp);
   const msrpB = priceSum(sideB, (b) => b.msrp);
   const streetA = priceSum(sideA, effectivePrice);
   const streetB = priceSum(sideB, effectivePrice);
-  const valueDiff = valueB - valueA;
   const msrpDiff = msrpB - msrpA;
-  const streetDiff = streetB - streetA;
 
   const hasTrade = sideA.length > 0 && sideB.length > 0;
   const tradeBottles = [...getBotles(sideA), ...getBotles(sideB)];
   // A real secondary price — the bottle's own, or inherited from its
-  // parent — not just an MSRP fallback. Drives whether the verdict beam
+  // parent — not just an MSRP fallback. Drives whether the summary line
   // shows a separate "secondary" delta alongside the MSRP delta.
   const anySecondary = tradeBottles.some((b) => {
     const info = priceInfo(b);
@@ -178,28 +197,32 @@ export default function TradeCalculator() {
   const allPriced =
     hasTrade && tradeBottles.every((b) => b.msrp != null);
 
-  const pct = hasTrade ? tradePct(valueA, valueB) : 0;
+  // tradeVerdict is the single source of truth for the verdict: price
+  // (via effectivePrice, the same resolvePrice chain used everywhere else)
+  // is the primary axis, with convex ELO as a bounded, price-proximity-
+  // gated tiebreaker. See tradeValue.js for the full model + rationale.
+  const verdict = hasTrade
+    ? tradeVerdict(
+        getBotles(sideA).map((b) => ({ elo: b.elo, price: effectivePrice(b) })),
+        getBotles(sideB).map((b) => ({ elo: b.elo, price: effectivePrice(b) }))
+      )
+    : null;
+  const verdictText = verdict ? verdictCopy(verdict.tier, verdict.favors) : null;
 
-  const verdict = !hasTrade
-    ? null
-    : pct <= 5
-    ? { label: "Dead even", tone: "text-amber-300" }
-    : pct <= 15
-    ? { label: "Fair trade", tone: "text-amber-300" }
-    : pct <= 35
-    ? {
-        label: valueDiff > 0 ? "Slight edge to you" : "Slight edge to them",
-        tone: "text-amber-400",
-      }
-    : {
-        label: valueDiff > 0 ? "You win this trade" : "They win this trade",
-        tone: valueDiff > 0 ? "text-emerald-400" : "text-red-400",
-      };
-
-  const totalValue = valueA + valueB;
-  const tilt = hasTrade && totalValue > 0
-    ? Math.max(-6, Math.min(6, (valueDiff / totalValue) * 12))
+  // Signed pct (positive = favors you) for the beam tilt, on the same
+  // 0–100 "pct of the larger side" scale tradeVerdict itself uses.
+  const signedPct = !verdict
+    ? 0
+    : verdict.favors === "you"
+    ? verdict.pct
+    : verdict.favors === "them"
+    ? -verdict.pct
     : 0;
+  // /50 anchors full tilt (±6°) to roughly the same 2x-price-gap point
+  // where ELO's influence (see ELO_ZERO_EFFECT_PRICE_PCT) goes to zero —
+  // the beam maxes out its lean right around where the verdict becomes
+  // "price alone, full stop."
+  const tilt = hasTrade && verdict ? Math.max(-6, Math.min(6, (signedPct / 50) * 6)) : 0;
 
   const addToSide = (id) => {
     if (pickerFor === "A") setSideA((s) => [...s, id]);
@@ -271,16 +294,28 @@ export default function TradeCalculator() {
           aria-live="polite"
           className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-4 mb-5 text-center"
         >
-          <div className="relative h-14 flex items-center justify-center overflow-hidden">
+          {/* h-20, not the old h-14: price labels ("$1,450.00") run much
+              longer than the old convex-pts labels ("88.2") did, and at the
+              beam's full ±6° tilt the low end can rotate down by ~23px. The
+              old h-14 + overflow-hidden clipped a label pushed up far enough
+              to clear the line at that rotation — taller box first, then
+              enough clearance to actually clear the line at max tilt. */}
+          <div className="relative h-28 flex items-center justify-center overflow-hidden">
             <div
               className="w-full max-w-md h-1.5 bg-amber-700 rounded-full relative transition-transform duration-500 motion-reduce:transition-none"
               style={{ transform: `rotate(${-tilt}deg)` }}
             >
-              <div className="absolute -left-1 -top-3 text-xs text-amber-400 font-semibold">
-                {sideA.length > 0 ? valueA.toFixed(1) : "—"}
+              {/* left-0/right-0, not the old -left-1/-right-1: on narrow
+                  viewports the beam's max-w-md cap never engages (the line
+                  is w-full, filling the clip box exactly), so any outward
+                  overhang here pushes straight past the clip boundary — a
+                  short "88.2"-style label hid this; a wider price string
+                  ("$150.00") visibly clips its last character. */}
+              <div className="absolute left-0 -top-6 text-xs text-amber-400 font-semibold">
+                {sideA.length > 0 ? money(streetA) : "—"}
               </div>
-              <div className="absolute -right-1 -top-3 text-xs text-amber-400 font-semibold">
-                {sideB.length > 0 ? valueB.toFixed(1) : "—"}
+              <div className="absolute right-0 -top-6 text-xs text-amber-400 font-semibold">
+                {sideB.length > 0 ? money(streetB) : "—"}
               </div>
               <div className="absolute left-1/2 -translate-x-1/2 -top-1 w-3 h-3 rounded-full bg-amber-400" />
             </div>
@@ -288,32 +323,34 @@ export default function TradeCalculator() {
 
           {verdict ? (
             <>
-              <div className={`font-serif text-xl ${verdict.tone}`}>
-                {verdict.label}
+              <div className={`font-serif text-xl ${verdictText.tone}`}>
+                {verdictText.label}
               </div>
               <div className="text-sm text-amber-100/80 mt-1">
-                {pct < 1
+                {verdict.pct < 1
                   ? "Perfectly balanced."
-                  : `${pct.toFixed(0)}% value ${
-                      valueDiff > 0 ? "in your favor" : "against you"
+                  : `${verdict.pct.toFixed(0)}% value ${
+                      verdict.favors === "you" ? "in your favor" : "against you"
                     }`}
                 {allPriced && (
                   <>
                     {" · "}
                     {anySecondary ? (
-                      // Show MSRP delta AND street delta when secondary values are present
+                      // Secondary delta leads — it's what the verdict is
+                      // actually measuring now; MSRP delta follows as
+                      // secondary reference info.
                       <>
+                        {verdict.priceDiff === 0
+                          ? "secondary even"
+                          : `you ${verdict.priceDiff > 0 ? "gain" : "give up"} ${money(
+                              Math.abs(verdict.priceDiff)
+                            )} secondary`}
+                        {" · "}
                         {msrpDiff === 0
                           ? "MSRP even"
                           : `you ${msrpDiff > 0 ? "gain" : "give up"} ${money(
                               Math.abs(msrpDiff)
                             )} MSRP`}
-                        {" · "}
-                        {streetDiff === 0
-                          ? "secondary even"
-                          : `you ${streetDiff > 0 ? "gain" : "give up"} ${money(
-                              Math.abs(streetDiff)
-                            )} secondary`}
                       </>
                     ) : (
                       <>
@@ -327,6 +364,11 @@ export default function TradeCalculator() {
                   </>
                 )}
               </div>
+              {verdict.crowdBrokeTheTie && (
+                <div className="text-xs italic text-amber-500/70 mt-1.5">
+                  crowd rating breaks the tie {verdict.favors === "you" ? "your" : "their"} way
+                </div>
+              )}
             </>
           ) : (
             <div className="text-stone-400 text-sm">
@@ -339,7 +381,8 @@ export default function TradeCalculator() {
         <div className="flex flex-col sm:flex-row gap-4">
           {(["A", "B"] ).map((side) => {
             const ids = side === "A" ? sideA : sideB;
-            const sideValue = side === "A" ? valueA : valueB;
+            const sidePrice = side === "A" ? streetA : streetB;
+            const sideConvex = side === "A" ? convexA : convexB;
             const msrp = side === "A" ? msrpA : msrpB;
             const title = side === "A" ? "You send" : "You receive";
             return (
@@ -351,14 +394,16 @@ export default function TradeCalculator() {
                   <h2 className="font-serif text-amber-300 text-lg">{title}</h2>
                   <div className="text-right">
                     <div className="text-amber-100 font-bold">
-                      {ids.length > 0 ? sideValue.toFixed(1) : "—"}{" "}
-                      <span className="text-xs font-normal text-amber-500/70">pts</span>
+                      {ids.length > 0 ? money(sidePrice) : "—"}
                     </div>
-                    {msrp > 0 && (
-                      <div className="text-amber-500/80 text-xs">
-                        {money(msrp)} MSRP
-                      </div>
-                    )}
+                    {/* ELO demoted to metadata: each bottle below already shows
+                        its own ELO, this is just the side's convex-value total,
+                        secondary to the price headline above. */}
+                    <div className="text-amber-500/80 text-xs">
+                      {msrp > 0 && `${money(msrp)} MSRP`}
+                      {msrp > 0 && ids.length > 0 && " · "}
+                      {ids.length > 0 && `${sideConvex.toFixed(1)} pts`}
+                    </div>
                   </div>
                 </div>
 
