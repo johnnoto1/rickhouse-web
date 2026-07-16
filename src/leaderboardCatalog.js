@@ -17,7 +17,7 @@ export async function fetchLeaderboardCatalog(supabase) {
   const { data } = await supabase
     .from("bottle_ratings")
     .select(
-      "bottle_id, rating, wins, losses, rounds_played, bottles(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id)"
+      "bottle_id, rating, wins, losses, rounds_played, bottles(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, release_year)"
     )
     .order("rating", { ascending: false })
     .limit(200);

@@ -75,7 +75,7 @@ function Shelf({ session, userId }) {
   const loadCatalog = () =>
     supabase
       .from("bottle_ratings")
-      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status)")
+      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type)")
       .order("rating", { ascending: false })
       .then(({ data }) => {
         setCatalog(
@@ -568,6 +568,10 @@ function FuzzyCheck({ query, catalog, onPick, onNone, onBack }) {
   );
 }
 
+const NEW_BOTTLE_TYPE_KEYS = ["bourbon", "rye", "other"];
+const NEW_BOTTLE_TYPE_LABELS = { bourbon: "Bourbon", rye: "Rye", other: "Other" };
+const MIN_RELEASE_YEAR = 1990;
+
 // v1: no bottles row is created here — this only writes a proposals row.
 // The bottle enters the catalog (with a curator-set tier + pricing) only
 // once accepted; see admin/review-proposals.sql.
@@ -576,9 +580,13 @@ function NewBottleForm({ userId, catalog, onSubmitted, onCancel }) {
   const [distillery, setDistillery] = useState("");
   const [proof, setProof] = useState("");
   const [parentSlug, setParentSlug] = useState("");
+  const [type, setType] = useState("bourbon");
+  const [releaseYear, setReleaseYear] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const maxReleaseYear = new Date().getFullYear() + 1;
 
   // Current parents + parentable bottles = every parent_id-null bottle —
   // the depth-guard trigger only blocks a bottle that's ALREADY a child
@@ -587,17 +595,35 @@ function NewBottleForm({ userId, catalog, onSubmitted, onCancel }) {
     () => catalog.filter((b) => b.parent_id == null).sort((a, b) => a.name.localeCompare(b.name)),
     [catalog]
   );
+  const selectedParent = useMemo(
+    () => (parentSlug ? catalog.find((b) => b.slug === parentSlug) : null),
+    [parentSlug, catalog]
+  );
+  // A batch release doesn't get its own type choice — it's whatever the
+  // line already is. Read-only display, not just a disabled selector, so
+  // there's no forged-then-ignored value sitting in the payload either.
+  const effectiveType = parentSlug ? selectedParent?.type ?? "bourbon" : type;
 
   const submit = async () => {
     if (!name.trim() || !distillery.trim()) {
       setError("Name and distillery are required.");
       return;
     }
+    let releaseYearNum = null;
+    if (releaseYear.trim()) {
+      const y = Number(releaseYear.trim());
+      if (!Number.isInteger(y) || releaseYear.trim().length !== 4 || y < MIN_RELEASE_YEAR || y > maxReleaseYear) {
+        setError(`Release year must be a 4-digit year between ${MIN_RELEASE_YEAR} and ${maxReleaseYear}.`);
+        return;
+      }
+      releaseYearNum = y;
+    }
     setSubmitting(true);
     setError("");
-    const payload = { name: name.trim(), distillery: distillery.trim() };
+    const payload = { name: name.trim(), distillery: distillery.trim(), type: effectiveType };
     if (proof.trim()) payload.proof = Number(proof);
     if (parentSlug) payload.parent_slug = parentSlug;
+    if (releaseYearNum != null) payload.release_year = releaseYearNum;
     if (notes.trim()) payload.notes = notes.trim();
 
     const { error: err } = await supabase.from("proposals").insert({
@@ -661,6 +687,46 @@ function NewBottleForm({ userId, catalog, onSubmitted, onCancel }) {
           </option>
         ))}
       </select>
+
+      {parentSlug ? (
+        <p className="text-xs text-stone-400 mb-3">
+          Type: <span className="text-amber-300 font-semibold">{NEW_BOTTLE_TYPE_LABELS[effectiveType]}</span>, from the line
+        </p>
+      ) : (
+        <>
+          <label className="block text-xs uppercase tracking-widest text-stone-400 mb-1">Type *</label>
+          <div className="flex gap-2 mb-3">
+            {NEW_BOTTLE_TYPE_KEYS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setType(key)}
+                aria-pressed={type === key}
+                className={
+                  "flex-1 py-2 rounded-md border text-xs uppercase tracking-widest font-semibold focus:outline-none focus:ring-2 focus:ring-amber-500 " +
+                  (type === key
+                    ? "bg-amber-700 border-amber-600 text-stone-950"
+                    : "border-stone-700 text-stone-400 hover:text-amber-300 hover:border-amber-700/60")
+                }
+              >
+                {NEW_BOTTLE_TYPE_LABELS[key]}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      <label className="block text-xs uppercase tracking-widest text-stone-400 mb-1">Release year (optional)</label>
+      <input
+        value={releaseYear}
+        onChange={(e) => setReleaseYear(e.target.value)}
+        type="number"
+        inputMode="numeric"
+        min={MIN_RELEASE_YEAR}
+        max={maxReleaseYear}
+        placeholder="e.g. 2026"
+        className="w-full bg-stone-950 border border-stone-700 rounded-md px-3 py-2 text-amber-100 mb-3 focus:outline-none focus:ring-2 focus:ring-amber-500"
+      />
 
       <label className="block text-xs uppercase tracking-widest text-stone-400 mb-1">Notes (optional)</label>
       <textarea
