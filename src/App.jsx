@@ -457,9 +457,21 @@ function Leaderboard() {
       // BATCHES table), plus Trade Calculator and Collection where picking
       // a specific batch is the point.
       const childCounts = new Map();
+      // release_year lives on the individual batch release, not the line
+      // itself (a line is a bourbon released across many years) — so
+      // "recent" for a hidden-behind-a-badge parent has to mean "any of
+      // its batches," tracked here as the newest one, not the parent's
+      // own (usually null) release_year.
+      const childMostRecentYear = new Map();
       for (const r of catalog) {
         if (r.bottles?.parent_id) {
-          childCounts.set(r.bottles.parent_id, (childCounts.get(r.bottles.parent_id) ?? 0) + 1);
+          const pid = r.bottles.parent_id;
+          childCounts.set(pid, (childCounts.get(pid) ?? 0) + 1);
+          const y = r.bottles.release_year;
+          if (y != null) {
+            const prev = childMostRecentYear.get(pid);
+            if (prev == null || y > prev) childMostRecentYear.set(pid, y);
+          }
         }
       }
       // Rank recomputed within the parents-only set — a hidden child
@@ -471,6 +483,7 @@ function Leaderboard() {
           ...r,
           ratingRank: i + 1,
           childCount: childCounts.get(r.bottle_id) ?? 0,
+          mostRecentChildYear: childMostRecentYear.get(r.bottle_id) ?? null,
         }));
       setRows(parentsOnly);
     });
@@ -479,6 +492,11 @@ function Leaderboard() {
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
+// "Recent" = this year or last — a rolling 2-year window instead of a
+// single-year cutoff, so the filter doesn't go from "12 bottles" to
+// "0 bottles" the moment January hits; it degrades to just-last-year's
+// releases for a while instead of emptying out entirely.
+const RECENT_RELEASE_MIN_YEAR = CURRENT_YEAR - 1;
 
 // Per-bottle effective price: secondary market when available, else MSRP
 // (matches the fallback rule in TradeCalculator's effectivePrice).
@@ -489,7 +507,7 @@ function Board({ title, rows, empty, sortable = false }) {
   // was removed from the nav, so sortable is the only board left, but the
   // gate stays explicit rather than assuming there's only one caller.
   const [typeFilters, setTypeFilters] = useState({ bourbon: true, rye: true, other: true });
-  const [thisYearOnly, setThisYearOnly] = useState(false);
+  const [recentOnly, setRecentOnly] = useState(false);
   const [showTierMarks, setShowTierMarks] = useState(true);
 
   const clickSort = (key) => {
@@ -514,10 +532,17 @@ function Board({ title, rows, empty, sortable = false }) {
     if (!rows || !sortable) return rows;
     return rows.filter((r) => {
       if (!typeFilters[r.bottles?.type ?? "bourbon"]) return false;
-      if (thisYearOnly && r.bottles?.release_year !== CURRENT_YEAR) return false;
+      // A line's own release_year is usually null (it's the parent —
+      // released across many years); "recent" means its own year OR any
+      // hidden-behind-the-badge batch's year qualifies.
+      if (recentOnly) {
+        const ownYear = r.bottles?.release_year ?? 0;
+        const childYear = r.mostRecentChildYear ?? 0;
+        if (Math.max(ownYear, childYear) < RECENT_RELEASE_MIN_YEAR) return false;
+      }
       return true;
     });
-  }, [rows, sortable, typeFilters, thisYearOnly]);
+  }, [rows, sortable, typeFilters, recentOnly]);
 
   // rows (for a sortable board) already carry price/priceIsFallback/value/
   // ratingRank — fetchLeaderboardCatalog computes all of that once at fetch
@@ -551,56 +576,77 @@ function Board({ title, rows, empty, sortable = false }) {
 
   const finalRows = sortable ? displayRows : rows;
   const anyGraduated = finalRows?.some((r) => (r.rounds_played ?? 0) >= 10) ?? false;
-  const filterActive = sortable && (TYPE_KEYS.some((k) => !typeFilters[k]) || thisYearOnly);
+  const filterActive = sortable && (TYPE_KEYS.some((k) => !typeFilters[k]) || recentOnly);
   const hasAnyRows = (rows?.length ?? 0) > 0;
 
-  // KTC-style dynamic tiers: sort by rating desc, break a new tier wherever
-  // the gap to the next bottle exceeds GAP_THRESHOLD — real separation in
-  // the standings, not an arbitrary fixed line. Grouping runs on the
-  // ROUNDED rating (the same integer the RATING column displays), never
-  // the raw float — that's the fix for the old century-band bug, where a
-  // bottle sitting right on a hundred-line could be floor-bucketed into
-  // the wrong band whenever its raw value drifted a hair off the display
-  // value (Elo updates are float arithmetic; "displays as 1700" and
-  // "raw value floors to 1700" are not always the same claim). Rounding
-  // first means a genuine on-screen tie can never trip a break, and a
-  // gap is always measured between numbers the user can actually see.
+  // KTC-style dynamic tiers: sort by rating desc, then walk the list in
+  // SIZE-BOUNDED chunks — each tier holds between MIN_TIER and MAX_TIER
+  // bottles, and within that size window we break at the LARGEST gap to
+  // the next bottle (a relative comparison within the window, not a fixed
+  // point threshold). A fixed threshold (the prior GAP_THRESHOLD=30
+  // design) only works while ratings still cluster in a few widely
+  // separated groups, e.g. the curator seed tiers — once real voting
+  // smooths the distribution into a near-continuum (prod's adjacent gaps
+  // are typically 1-5 points once rounds accumulate), no single fixed
+  // number can tell "a real tier boundary" from ordinary rating noise; a
+  // relative, size-bounded search is the only approach that still finds
+  // meaningful breaks in a smooth curve. Grouping still runs on the
+  // ROUNDED rating (matches what the RATING column displays), preserving
+  // the earlier fix where raw-float boundary values could floor into the
+  // wrong band.
   //
-  // GAP_THRESHOLD=30, tuned against the current 158-bottle seeded board:
-  // the 6 curator starting tiers (1800/1700/1640/1580/1520/1470) sit
-  // 50-100 points apart, so 30 reliably breaks at every one of those
-  // seams (~6 tiers, inside the 5-8 target) while staying above a
-  // typical single-round swing for an established bottle (K=16 → up to
-  // ~32/round, see _shared/elo.ts) — ordinary vote noise won't fracture
-  // the board into dozens of tiers once real rounds start recording;
-  // expect it to relax into fewer, wider tiers as ratings spread out.
+  // MIN_TIER=10, MAX_TIER=15 — tuned directly against prod's live
+  // 145-bottle board (read via the anon REST API before this shipped):
+  // yields 11 tiers sized 11-15, comfortably inside the 8-15 target.
+  //
+  // Tie-breaking: when several candidate breakpoints in the size window
+  // have an equally large gap — most often because a whole run is tied
+  // at the same rating, e.g. today's local seed priors — prefer the
+  // LATEST candidate, i.e. consume as much of a uniform run as the
+  // window allows before being forced elsewhere. Verified against the
+  // six seed-tier priors: this keeps the two largest seed clusters
+  // (1640, 1580 — 26 and 28 bottles) splitting cleanly along their own
+  // boundary with no tier crossing into the next cluster; the smaller
+  // 1520/1470 pair (38 and 30 bottles) still needs one boundary-crossing
+  // tier to satisfy MIN_TIER — the expected trade-off the size bound
+  // makes on a degenerate step distribution, not a bug.
   //
   // Bands only make sense against the default rating-desc order — asc
   // would put "Tier 1" at the bottom, and price/value sort scrambles
   // rating order entirely — so separators hide themselves in both cases
   // (see tierSeparators below) rather than draw something misleading.
-  // Recomputed from finalRows (post type-filter, post This-Year's), so a
-  // rye-only board gets its own tier breaks instead of inheriting gaps
-  // from the full catalog.
-  const GAP_THRESHOLD = 30;
+  // Recomputed from finalRows (post type-filter, post Recent Releases),
+  // so a rye-only board gets its own tier breaks instead of inheriting
+  // gaps from the full catalog.
+  const MIN_TIER = 10;
+  const MAX_TIER = 15;
 
   const tierBands = useMemo(() => {
     if (!showTierMarks || !sortable || sortKey !== "rating" || sortDir !== "desc" || !finalRows?.length) {
       return [];
     }
+    const ratings = finalRows.map((r) => Math.round(r.rating));
+    const n = ratings.length;
     const bands = [];
-    let current = null;
-    let prevRating = null;
-    finalRows.forEach((r, i) => {
-      const rating = Math.round(r.rating);
-      if (current && prevRating - rating <= GAP_THRESHOLD) {
-        current.end = i;
-      } else {
-        current = { start: i, end: i };
-        bands.push(current);
+    let start = 0;
+    while (start < n) {
+      const remaining = n - start;
+      if (remaining <= MAX_TIER) {
+        bands.push({ start, end: n - 1 });
+        break;
       }
-      prevRating = rating;
-    });
+      let bestEnd = start + MIN_TIER - 1;
+      let bestGap = -Infinity;
+      for (let end = start + MIN_TIER - 1; end <= start + MAX_TIER - 1; end++) {
+        const gap = ratings[end] - ratings[end + 1];
+        if (gap >= bestGap) {
+          bestGap = gap;
+          bestEnd = end;
+        }
+      }
+      bands.push({ start, end: bestEnd });
+      start = bestEnd + 1;
+    }
     return bands.map((b, idx) => ({ ...b, tierNumber: idx + 1 }));
   }, [finalRows, sortKey, sortDir, sortable, showTierMarks]);
 
@@ -647,11 +693,11 @@ function Board({ title, rows, empty, sortable = false }) {
             })}
             <button
               type="button"
-              className={"typeChip" + (thisYearOnly ? " typeChipOn" : "")}
-              onClick={() => setThisYearOnly((v) => !v)}
-              aria-pressed={thisYearOnly}
+              className={"typeChip" + (recentOnly ? " typeChipOn" : "")}
+              onClick={() => setRecentOnly((v) => !v)}
+              aria-pressed={recentOnly}
             >
-              This Year's Releases
+              Recent Releases
             </button>
             {filterActive && (
               <span style={S.leaderFilterCount}>
@@ -665,7 +711,9 @@ function Board({ title, rows, empty, sortable = false }) {
         {finalRows?.length === 0 && (
           <p style={{ padding: 18, fontSize: 14 }}>
             {filterActive
-              ? "No bottles match this filter."
+              ? recentOnly
+                ? `No bottles released in ${RECENT_RELEASE_MIN_YEAR} or later yet.`
+                : "No bottles match this filter."
               : empty ?? "No rated bottles yet."}
           </p>
         )}
@@ -739,6 +787,15 @@ function Board({ title, rows, empty, sortable = false }) {
                     {r.childCount > 0 && (
                       <span style={S.rowBatchBadge}>
                         {r.childCount} batch{r.childCount === 1 ? "" : "es"}
+                        {/* Only under the active Recent Releases filter, and only
+                            when it's a BATCH's year doing the qualifying (the line's
+                            own release_year almost always is null) — explains why a
+                            line with no date of its own showed up in a dated filter. */}
+                        {recentOnly &&
+                          (r.mostRecentChildYear ?? 0) >= RECENT_RELEASE_MIN_YEAR &&
+                          (r.bottles?.release_year ?? 0) < RECENT_RELEASE_MIN_YEAR && (
+                            <> · {r.mostRecentChildYear}</>
+                          )}
                       </span>
                     )}
                     {provisional && (
