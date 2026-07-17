@@ -5,6 +5,7 @@ import { resolvePrice } from "./tradeValue.js";
 import { eloToDisplayRating } from "./ratingDisplay.js";
 import { fuzzyMatchBottles } from "./fuzzyMatch.js";
 import ContributionGate from "./ContributionGate.jsx";
+import BottleImage from "./BottleImage.jsx";
 
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -76,7 +77,7 @@ function Shelf({ session, userId }) {
   const loadCatalog = () =>
     supabase
       .from("bottle_ratings")
-      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type)")
+      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type, image_url)")
       .order("rating", { ascending: false })
       .then(({ data }) => {
         setCatalog(
@@ -90,7 +91,7 @@ function Shelf({ session, userId }) {
     supabase
       .from("collections")
       .select(
-        "id, qty, added_at, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, bottle_ratings(rating, wins, losses))"
+        "id, added_at, status, purchase_price, acquired_date, notes, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, image_url, bottle_ratings(rating, wins, losses))"
       )
       .eq("user_id", userId)
       .order("added_at", { ascending: false })
@@ -121,9 +122,16 @@ function Shelf({ session, userId }) {
     }
   }, [rows]);
 
-  const byBottleId = useMemo(() => {
+  // Per-row model: a bottle_id can appear on multiple rows now (owning
+  // three of the same bottle is three legitimate rows), so this is a
+  // count, not a single-row lookup — used only for the picker's "owned
+  // ×N" badge, never to key an update/delete (those go by row id).
+  const ownedCountByBottleId = useMemo(() => {
     const m = new Map();
-    (rows ?? []).forEach((r) => m.set(r.bottles?.id, r));
+    (rows ?? []).forEach((r) => {
+      const id = r.bottles?.id;
+      if (id) m.set(id, (m.get(id) ?? 0) + 1);
+    });
     return m;
   }, [rows]);
 
@@ -155,29 +163,17 @@ function Shelf({ session, userId }) {
     );
   }, [query, catalog]);
 
+  // Plain insert, no upsert/onConflict: per-row, owning the same bottle
+  // twice is two legitimate rows, not a qty bump on one. "Add another" is
+  // just calling this again with the same bottleId.
   const addBottle = async (bottleId) => {
-    const existing = byBottleId.get(bottleId);
-    const qty = existing ? Math.min(existing.qty + 1, 99) : 1;
-    await supabase
-      .from("collections")
-      .upsert(
-        { user_id: userId, bottle_id: bottleId, qty },
-        { onConflict: "user_id,bottle_id" }
-      );
+    await supabase.from("collections").insert({ user_id: userId, bottle_id: bottleId });
     closePicker();
     await loadRows();
   };
 
-  const bump = async (row, delta) => {
-    const next = row.qty + delta;
-    if (next < 1) {
-      setConfirmingId(row.id);
-      return;
-    }
-    await supabase
-      .from("collections")
-      .update({ qty: Math.min(next, 99) })
-      .eq("id", row.id);
+  const updateRow = async (rowId, patch) => {
+    await supabase.from("collections").update(patch).eq("id", rowId);
     await loadRows();
   };
 
@@ -209,10 +205,12 @@ function Shelf({ session, userId }) {
     [proposals]
   );
 
-  const totalBottles = (rows ?? []).reduce((t, r) => t + r.qty, 0);
+  // Per-row model: one row IS one bottle now, so totals are plain sums/
+  // counts over rows — no more qty multiplier.
+  const totalBottles = (rows ?? []).length;
   const totalStreetValue = (rows ?? []).reduce((t, r) => {
     const price = priceInfo(r.bottles).price;
-    return t + (price ?? 0) * r.qty;
+    return t + (price ?? 0);
   }, 0);
   const ratedRows = (rows ?? []).filter((r) => r.bottles?.bottle_ratings);
   const avgRating =
@@ -220,6 +218,21 @@ function Shelf({ session, userId }) {
       ? ratedRows.reduce((t, r) => t + r.bottles.bottle_ratings.rating, 0) /
         ratedRows.length
       : null;
+
+  // Cost basis / unrealized P&L: only over rows that actually have a
+  // purchase_price. A gift or a bottle with unknown cost has no basis to
+  // measure gain/loss against, so it's excluded from both sums rather than
+  // silently treated as a $0 cost basis (which would inflate "gain").
+  // Further narrowed to rows with a resolvable price (secondary or MSRP
+  // fallback, via priceInfo/resolvePrice) — a cost-basis row with no
+  // price data anywhere in the chain has nothing to compare its cost to.
+  const costBasisRows = (rows ?? []).filter((r) => r.purchase_price != null);
+  const totalCostBasis = costBasisRows.reduce((t, r) => t + Number(r.purchase_price), 0);
+  const valuedCostBasisRows = costBasisRows.filter((r) => priceInfo(r.bottles).price != null);
+  const unrealizedGainLoss = valuedCostBasisRows.reduce(
+    (t, r) => t + (priceInfo(r.bottles).price - Number(r.purchase_price)),
+    0
+  );
 
   const loading = rows === null;
 
@@ -255,21 +268,52 @@ function Shelf({ session, userId }) {
           <p className="text-amber-300/80 text-sm italic text-center">Pulling your shelf…</p>
         ) : (
           <>
-            <section className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-4 mb-5 grid grid-cols-3 gap-2 text-center">
-              <div>
-                <div className="text-amber-100 font-bold text-xl">{totalBottles}</div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Bottles</div>
-              </div>
-              <div>
-                <div className="text-amber-100 font-bold text-xl">{money(totalStreetValue)}</div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Secondary value</div>
-              </div>
-              <div>
-                <div className="text-amber-100 font-bold text-xl">
-                  {avgRating != null ? eloToDisplayRating(avgRating) : "—"}
+            <section className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-4 mb-5">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div>
+                  <div className="text-amber-100 font-bold text-xl">{totalBottles}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Bottles</div>
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Avg rating</div>
+                <div>
+                  <div className="text-amber-100 font-bold text-xl">{money(totalStreetValue)}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Secondary value</div>
+                </div>
+                <div>
+                  <div className="text-amber-100 font-bold text-xl">
+                    {avgRating != null ? eloToDisplayRating(avgRating) : "—"}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Avg rating</div>
+                </div>
               </div>
+
+              {costBasisRows.length > 0 && (
+                <div className="grid grid-cols-2 gap-2 text-center mt-3 pt-3 border-t border-amber-900/40">
+                  <div>
+                    <div className="text-amber-100 font-bold text-xl">{money(totalCostBasis)}</div>
+                    <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">
+                      Cost basis ({costBasisRows.length})
+                    </div>
+                  </div>
+                  <div>
+                    <div
+                      className={
+                        "font-bold text-xl " +
+                        (unrealizedGainLoss > 0
+                          ? "text-emerald-400"
+                          : unrealizedGainLoss < 0
+                          ? "text-red-400"
+                          : "text-amber-100")
+                      }
+                    >
+                      {unrealizedGainLoss >= 0 ? "+" : "−"}
+                      {money(Math.abs(unrealizedGainLoss))}
+                    </div>
+                    <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">
+                      Unrealized P/L ({valuedCostBasisRows.length} priced)
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
 
             {rows.length === 0 && pendingNewBottles.length === 0 ? (
@@ -278,86 +322,18 @@ function Shelf({ session, userId }) {
               </div>
             ) : (
               <div className="space-y-2">
-                {rows.map((r) => {
-                  const b = r.bottles;
-                  if (!b) return null;
-                  const { price, tag } = priceInfo(b);
-                  const rating = b.bottle_ratings?.rating ?? 1500;
-                  const wins = b.bottle_ratings?.wins ?? 0;
-                  const losses = b.bottle_ratings?.losses ?? 0;
-                  const confirming = confirmingId === r.id;
-                  return (
-                    <div
-                      key={r.id}
-                      className="bg-amber-50 rounded-md border border-amber-200 shadow-md px-3 py-2.5 flex items-start gap-3"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <Link
-                          to={`/bottle/${b.slug}`}
-                          className="font-serif font-bold text-stone-900 leading-tight truncate block hover:text-amber-700 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
-                        >
-                          {b.name}
-                        </Link>
-                        <div className="text-[11px] uppercase tracking-widest text-stone-500 mt-0.5">
-                          {b.distillery}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-stone-700">
-                          <span className="font-semibold">{eloToDisplayRating(rating)} rating</span>
-                          <span>{wins}–{losses}</span>
-                          {price != null ? (
-                            <span className="flex items-center gap-1">
-                              {money(price)}
-                              {tag && (
-                                <span className="text-[10px] uppercase tracking-wider text-stone-500 border border-stone-400 rounded px-1">
-                                  {tag}
-                                </span>
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-stone-400">no price data</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {confirming ? (
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-xs text-stone-600">Remove?</span>
-                          <button
-                            onClick={() => removeRow(r)}
-                            className="text-xs uppercase tracking-wider text-red-700 font-semibold px-2 py-1 rounded border border-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          >
-                            Yes
-                          </button>
-                          <button
-                            onClick={() => setConfirmingId(null)}
-                            className="text-xs uppercase tracking-wider text-stone-500 px-2 py-1 rounded border border-stone-300 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            onClick={() => bump(r, -1)}
-                            aria-label={`Decrease quantity of ${b.name}`}
-                            className="w-7 h-7 flex items-center justify-center rounded border border-stone-400 text-stone-700 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          >
-                            −
-                          </button>
-                          <span className="w-5 text-center font-semibold text-stone-900">{r.qty}</span>
-                          <button
-                            onClick={() => bump(r, 1)}
-                            aria-label={`Increase quantity of ${b.name}`}
-                            disabled={r.qty >= 99}
-                            className="w-7 h-7 flex items-center justify-center rounded border border-stone-400 text-stone-700 hover:bg-stone-100 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-amber-500"
-                          >
-                            +
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                {rows.map((r) => (
+                  <CollectionRow
+                    key={r.id}
+                    row={r}
+                    priceInfo={priceInfo}
+                    confirming={confirmingId === r.id}
+                    onRequestDelete={() => setConfirmingId(r.id)}
+                    onConfirmDelete={() => removeRow(r)}
+                    onCancelDelete={() => setConfirmingId(null)}
+                    onUpdate={(patch) => updateRow(r.id, patch)}
+                  />
+                ))}
 
                 {pendingNewBottles.map((p) => (
                   <div
@@ -449,33 +425,36 @@ function Shelf({ session, userId }) {
                     </div>
                   )}
                   {pickerResults.map((b) => {
-                    const owned = byBottleId.get(b.id);
+                    const ownedCount = ownedCountByBottleId.get(b.id) ?? 0;
                     const { price, tag } = priceInfo(b);
                     return (
                       <button
                         key={b.id}
                         onClick={() => addBottle(b.id)}
-                        className="w-full text-left bg-stone-950/60 hover:bg-amber-900/20 border border-stone-800 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        className="w-full text-left bg-stone-950/60 hover:bg-amber-900/20 border border-stone-800 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-amber-500 flex items-center gap-3"
                       >
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span className="font-serif text-amber-100 truncate">{b.name}</span>
-                          <span className="text-amber-400 font-semibold text-sm shrink-0">
-                            {eloToDisplayRating(b.rating)}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-xs mt-0.5">
-                          <span className="text-stone-500 uppercase tracking-wider">{b.distillery}</span>
-                          <span className="text-stone-400 flex items-center gap-2">
-                            {price != null ? money(price) : "—"}
-                            {tag && (
-                              <span className="text-[9px] uppercase tracking-wider text-stone-500 border border-stone-600 rounded px-1">
-                                {tag}
-                              </span>
-                            )}
-                            {owned && (
-                              <span className="text-amber-500">owned ×{owned.qty}</span>
-                            )}
-                          </span>
+                        <BottleImage bottle={b} rating={b.rating} className="w-10 h-10 rounded text-xs" />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline justify-between gap-2">
+                            <span className="font-serif text-amber-100 truncate">{b.name}</span>
+                            <span className="text-amber-400 font-semibold text-sm shrink-0">
+                              {eloToDisplayRating(b.rating)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs mt-0.5">
+                            <span className="text-stone-500 uppercase tracking-wider">{b.distillery}</span>
+                            <span className="text-stone-400 flex items-center gap-2">
+                              {price != null ? money(price) : "—"}
+                              {tag && (
+                                <span className="text-[9px] uppercase tracking-wider text-stone-500 border border-stone-600 rounded px-1">
+                                  {tag}
+                                </span>
+                              )}
+                              {ownedCount > 0 && (
+                                <span className="text-amber-500">owned ×{ownedCount}</span>
+                              )}
+                            </span>
+                          </div>
                         </div>
                       </button>
                     );
@@ -520,6 +499,136 @@ function Shelf({ session, userId }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+const STATUS_LABELS = { sealed: "Sealed", open: "Open", finished: "Finished" };
+
+// One physical bottle, one row, editable inline. purchase_price/
+// acquired_date/notes save on blur (not on every keystroke — this is a
+// live DB write per field, not local-only state); status saves
+// immediately on change since a <select> has no meaningful "still typing"
+// state to wait out.
+function CollectionRow({ row, priceInfo, confirming, onRequestDelete, onConfirmDelete, onCancelDelete, onUpdate }) {
+  const b = row.bottles;
+  const [purchasePrice, setPurchasePrice] = useState(row.purchase_price ?? "");
+  const [acquiredDate, setAcquiredDate] = useState(row.acquired_date ?? "");
+  const [notes, setNotes] = useState(row.notes ?? "");
+
+  if (!b) return null;
+
+  const { price, tag } = priceInfo(b);
+  const rating = b.bottle_ratings?.rating ?? 1500;
+  const wins = b.bottle_ratings?.wins ?? 0;
+  const losses = b.bottle_ratings?.losses ?? 0;
+
+  return (
+    <div className="bg-amber-50 rounded-md border border-amber-200 shadow-md px-3 py-2.5">
+      <div className="flex items-start gap-3">
+        <BottleImage bottle={b} rating={rating} className="w-12 h-12 rounded text-sm" />
+        <div className="flex-1 min-w-0">
+          <Link
+            to={`/bottle/${b.slug}`}
+            className="font-serif font-bold text-stone-900 leading-tight truncate block hover:text-amber-700 hover:underline focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+          >
+            {b.name}
+          </Link>
+          <div className="text-[11px] uppercase tracking-widest text-stone-500 mt-0.5">
+            {b.distillery}
+          </div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-stone-700">
+            <span className="font-semibold">{eloToDisplayRating(rating)} rating</span>
+            <span>{wins}–{losses}</span>
+            {price != null ? (
+              <span className="flex items-center gap-1">
+                {money(price)}
+                {tag && (
+                  <span className="text-[10px] uppercase tracking-wider text-stone-500 border border-stone-400 rounded px-1">
+                    {tag}
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-stone-400">no price data</span>
+            )}
+          </div>
+        </div>
+
+        {confirming ? (
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-stone-600">Remove?</span>
+            <button
+              onClick={onConfirmDelete}
+              className="text-xs uppercase tracking-wider text-red-700 font-semibold px-2 py-1 rounded border border-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              Yes
+            </button>
+            <button
+              onClick={onCancelDelete}
+              className="text-xs uppercase tracking-wider text-stone-500 px-2 py-1 rounded border border-stone-300 hover:bg-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={onRequestDelete}
+            aria-label={`Remove ${b.name}`}
+            className="w-7 h-7 shrink-0 flex items-center justify-center rounded border border-stone-400 text-stone-500 hover:text-red-700 hover:border-red-300 hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-amber-500"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      <div className="mt-2 pt-2 border-t border-amber-200/70 flex flex-wrap items-center gap-2 text-xs">
+        <select
+          value={row.status}
+          onChange={(e) => onUpdate({ status: e.target.value })}
+          aria-label={`Status for ${b.name}`}
+          className="bg-white border border-stone-300 rounded px-1.5 py-1 text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        >
+          {Object.entries(STATUS_LABELS).map(([key, label]) => (
+            <option key={key} value={key}>
+              {label}
+            </option>
+          ))}
+        </select>
+
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          placeholder="Purchase price"
+          value={purchasePrice}
+          onChange={(e) => setPurchasePrice(e.target.value)}
+          onBlur={() =>
+            onUpdate({ purchase_price: purchasePrice === "" ? null : Number(purchasePrice) })
+          }
+          aria-label={`Purchase price for ${b.name}`}
+          className="w-28 bg-white border border-stone-300 rounded px-1.5 py-1 text-stone-700 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        />
+
+        <input
+          type="date"
+          value={acquiredDate ?? ""}
+          onChange={(e) => setAcquiredDate(e.target.value)}
+          onBlur={() => onUpdate({ acquired_date: acquiredDate === "" ? null : acquiredDate })}
+          aria-label={`Acquired date for ${b.name}`}
+          className="bg-white border border-stone-300 rounded px-1.5 py-1 text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        />
+
+        <input
+          type="text"
+          placeholder="Notes"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          onBlur={() => onUpdate({ notes: notes.trim() === "" ? null : notes })}
+          aria-label={`Notes for ${b.name}`}
+          className="flex-1 min-w-[8rem] bg-white border border-stone-300 rounded px-1.5 py-1 text-stone-700 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+        />
+      </div>
     </div>
   );
 }
