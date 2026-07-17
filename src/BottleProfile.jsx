@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
+import { eloToDisplayRating } from "./ratingDisplay.js";
 import ContributionGate from "./ContributionGate.jsx";
 
 const money = (n) =>
@@ -170,7 +171,7 @@ function Profile({ session, bottle, rating, snapshots, value, price, priceTag, p
     bottle.proof != null ? `${fmtProof(bottle.proof)} PROOF` : bottle.proof_note ?? "—";
 
   const stats = [
-    { label: "Rating", value: Math.round(rating.rating) },
+    { label: "Rating", value: eloToDisplayRating(rating.rating) },
     {
       label: "Rank",
       value: rankNow != null ? `#${rankNow}` : "—",
@@ -209,7 +210,7 @@ function Profile({ session, bottle, rating, snapshots, value, price, priceTag, p
           </div>
         )}
         <div className="mt-7 font-serif font-bold text-amber-400 text-6xl sm:text-7xl leading-none">
-          {Math.round(rating.rating)}
+          {eloToDisplayRating(rating.rating)}
         </div>
         <div className="text-[11px] uppercase tracking-widest text-amber-600 mt-2">
           Current rating
@@ -583,7 +584,7 @@ function BatchesTable({ batches }) {
             {c.bottles.proof != null ? fmtProof(c.bottles.proof) : "—"}
           </span>
           <span className="w-14 shrink-0 text-right font-bold text-stone-900">
-            {Math.round(c.rating)}
+            {eloToDisplayRating(c.rating)}
           </span>
           <span className="w-16 shrink-0 text-right text-stone-500 hidden sm:block">
             {c.wins}–{c.losses}
@@ -669,7 +670,15 @@ function RatingHistory({ snapshots }) {
         </div>
       </div>
       <LineChart
-        points={snapshots.map((s) => ({ date: s.snap_date, value: mode === "rating" ? s.rating : s.rank }))}
+        points={snapshots.map((s) => ({
+          date: s.snap_date,
+          // Rank stays a rank (an ordinal, not an ELO-derived scale — never
+          // touches eloToDisplayRating). Rating is transformed here, at the
+          // data-feed point, so LineChart itself needs no changes: its
+          // Y-axis bounds already derive from whatever values it's handed,
+          // so they adapt to the display-rating range automatically.
+          value: mode === "rating" ? eloToDisplayRating(s.rating) : s.rank,
+        }))}
         invert={mode === "rank"}
         valueLabel={mode === "rating" ? "rating" : "rank"}
       />

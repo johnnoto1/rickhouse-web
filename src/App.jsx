@@ -7,6 +7,7 @@ import Landing from "./Landing";
 import BottleProfile from "./BottleProfile";
 import AddEmail from "./AddEmail";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
+import { eloToDisplayRating } from "./ratingDisplay.js";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -380,18 +381,29 @@ function Game({ session, view, goView }) {
                     </div>
                     <div style={S.labelRating}>
                       <span style={S.ratingNum}>
-                        {d ? d.new_rating : b.rating}
+                        {eloToDisplayRating(d ? d.new_rating : b.rating)}
                       </span>
                       <span style={S.ratingCap}>RATING</span>
-                      {d && (
-                        <span
-                          className="delta"
-                          style={{ color: d.change >= 0 ? "#3E7C4F" : "#A03325" }}
-                        >
-                          {d.change >= 0 ? "+" : ""}
-                          {d.change}
-                        </span>
-                      )}
+                      {d && (() => {
+                        // d.change is the raw ELO delta the server returned;
+                        // re-derive the pre-round ELO from it so the shown
+                        // delta is the SAME transform applied to both ends,
+                        // not a raw-scale number sitting next to a display-
+                        // scale rating (which is exactly the "mixed scales"
+                        // this feature exists to eliminate).
+                        const displayDelta =
+                          eloToDisplayRating(d.new_rating) -
+                          eloToDisplayRating(d.new_rating - d.change);
+                        return (
+                          <span
+                            className="delta"
+                            style={{ color: displayDelta >= 0 ? "#3E7C4F" : "#A03325" }}
+                          >
+                            {displayDelta >= 0 ? "+" : ""}
+                            {displayDelta}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div style={S.btnRow}>
                       {ROLES.map((r) => (
@@ -802,7 +814,7 @@ function Board({ title, rows, empty, sortable = false }) {
                       <span style={S.rowRoundsProvisional}>prov.</span>
                     )}
                     <span style={S.rowRecord} className="hideMobile rowRecordCell">{r.wins}–{r.losses}</span>
-                    <span style={S.rowRating} className="rowRatingCell">{Math.round(r.rating)}</span>
+                    <span style={S.rowRating} className="rowRatingCell">{eloToDisplayRating(r.rating)}</span>
                     {sortable && (
                       <span style={S.rowPrice} className="hideMobile rowPriceCell">
                         {r.price != null ? (

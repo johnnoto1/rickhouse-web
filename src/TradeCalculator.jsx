@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { bottleValue, resolvePrice, tradeVerdict } from "./tradeValue.js";
+import { eloToDisplayRating, convexToDisplayPoints } from "./ratingDisplay.js";
 
 // Maps a tradeVerdict tier + favored side to display copy. Kept local to
 // this component (not tradeValue.js) — that module stays framework/JSX
@@ -123,10 +124,26 @@ export default function TradeCalculator() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalog, byId]);
 
-  // ELO per effective-price dollar; null when no price available.
+  // ELO per effective-price dollar; null when no price available. Drives
+  // sort order and the ★ value-cutoff threshold — deliberately untouched
+  // raw ELO, NOT eloToDisplayRating(b.elo)/ep. That's not an oversight:
+  // eloToDisplayRating is a nonlinear (convex) transform, so replacing the
+  // numerator here would change which bottles clear valueCutoff and how
+  // "Best value" sorts — a behavior change, not a display one, which the
+  // "display layer only" constraint rules out. See displayRatio below for
+  // the text actually shown to the user.
   const ratio = (b) => {
     const ep = effectivePrice(b);
     return ep != null ? b.elo / ep : null;
+  };
+
+  // Display-only counterpart to ratio() above: same bottle, same price,
+  // but the numerator is the display-scale rating so the printed text
+  // never shows a raw ELO number (or the word "ELO") — only the sort/
+  // threshold logic keeps using ratio()'s raw value.
+  const displayRatio = (b) => {
+    const ep = effectivePrice(b);
+    return ep != null ? eloToDisplayRating(b.elo) / ep : null;
   };
 
   // Bottles on the *opposite* side are blocked from the picker — you can't
@@ -396,13 +413,19 @@ export default function TradeCalculator() {
                     <div className="text-amber-100 font-bold">
                       {ids.length > 0 ? money(sidePrice) : "—"}
                     </div>
-                    {/* ELO demoted to metadata: each bottle below already shows
-                        its own ELO, this is just the side's convex-value total,
-                        secondary to the price headline above. */}
+                    {/* Rating demoted to metadata: each bottle below already
+                        shows its own rating, this is just the side's convex-
+                        value total, secondary to the price headline above.
+                        convexToDisplayPoints, not eloToDisplayRating — this
+                        is a SUM across bottles, not one bottle's own rating,
+                        so it deliberately isn't clamped to the single-bottle
+                        0-9999 ceiling (see ratingDisplay.js). Same DISPLAY_SCALE
+                        as every other rating on screen, so this number is
+                        finally on the same scale as the leaderboard. */}
                     <div className="text-amber-500/80 text-xs">
                       {msrp > 0 && `${money(msrp)} MSRP`}
                       {msrp > 0 && ids.length > 0 && " · "}
-                      {ids.length > 0 && `${sideConvex.toFixed(1)} pts`}
+                      {ids.length > 0 && `${convexToDisplayPoints(sideConvex)} pts`}
                     </div>
                   </div>
                 </div>
@@ -415,6 +438,7 @@ export default function TradeCalculator() {
                   )}
                   {getBotles(ids).map((b, idx) => {
                     const r = ratio(b);
+                    const dr = displayRatio(b);
                     const line = priceLine(b);
                     return (
                       <div
@@ -432,7 +456,7 @@ export default function TradeCalculator() {
                             {b.distillery}
                           </div>
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-stone-700">
-                            <span className="font-semibold">{b.elo} ELO</span>
+                            <span className="font-semibold">{eloToDisplayRating(b.elo)} Rating</span>
                             {anyGraduated && b.rounds_played < 10 && (
                               <span className="italic" style={{ color: "#B08040" }}>provisional</span>
                             )}
@@ -446,7 +470,7 @@ export default function TradeCalculator() {
                                       : "text-stone-500"
                                   }
                                 >
-                                  {r.toFixed(1)} ELO/$
+                                  {dr.toFixed(1)} pts/$
                                   {r >= valueCutoff ? " ★" : ""}
                                 </span>
                               </>
@@ -523,7 +547,7 @@ export default function TradeCalculator() {
               <div className="flex gap-2 mt-3 text-xs">
                 {[
                   ["elo", "Top rated"],
-                  ["value", "Best value (ELO/$)"],
+                  ["value", "Best value (pts/$)"],
                   ["msrp", "Cheapest"],
                 ].map(([k, label]) => (
                   <button
@@ -550,6 +574,7 @@ export default function TradeCalculator() {
               )}
               {pickerResults.map((b) => {
                 const r = ratio(b);
+                const dr = displayRatio(b);
                 const line = priceLine(b);
                 return (
                   <button
@@ -562,7 +587,7 @@ export default function TradeCalculator() {
                         {displayName(b)}
                       </span>
                       <span className="text-amber-400 font-semibold text-sm shrink-0">
-                        {b.elo}
+                        {eloToDisplayRating(b.elo)}
                       </span>
                     </div>
                     <div className="flex items-center justify-between text-xs mt-0.5">
@@ -579,7 +604,7 @@ export default function TradeCalculator() {
                         >
                           {line}
                           {" · "}
-                          {r.toFixed(1)} ELO/$
+                          {dr.toFixed(1)} pts/$
                           {r >= valueCutoff ? " ★" : ""}
                         </span>
                       )}

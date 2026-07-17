@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
+import { eloToDisplayRating } from "./ratingDisplay.js";
 import medalsHeroWebp from "./assets/medals-hero.webp";
 import medalsHeroJpg from "./assets/medals-hero-fallback.jpg";
 import medalsHeroMobileWebp from "./assets/medals-hero-mobile.webp";
@@ -128,7 +129,7 @@ export default function Landing() {
                     </span>
                   </span>
                   <span className="w-[56px] shrink-0 text-right font-bold text-[#2A1B0C]">
-                    {Math.round(r.rating)}
+                    {eloToDisplayRating(r.rating)}
                   </span>
                 </div>
               ))}

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { resolvePrice } from "./tradeValue.js";
+import { eloToDisplayRating } from "./ratingDisplay.js";
 import { fuzzyMatchBottles } from "./fuzzyMatch.js";
 import ContributionGate from "./ContributionGate.jsx";
 
@@ -265,7 +266,7 @@ function Shelf({ session, userId }) {
               </div>
               <div>
                 <div className="text-amber-100 font-bold text-xl">
-                  {avgRating != null ? Math.round(avgRating) : "—"}
+                  {avgRating != null ? eloToDisplayRating(avgRating) : "—"}
                 </div>
                 <div className="text-[10px] uppercase tracking-widest text-amber-500/70 mt-1">Avg rating</div>
               </div>
@@ -301,7 +302,7 @@ function Shelf({ session, userId }) {
                           {b.distillery}
                         </div>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-stone-700">
-                          <span className="font-semibold">{Math.round(rating)} rating</span>
+                          <span className="font-semibold">{eloToDisplayRating(rating)} rating</span>
                           <span>{wins}–{losses}</span>
                           {price != null ? (
                             <span className="flex items-center gap-1">
@@ -459,7 +460,7 @@ function Shelf({ session, userId }) {
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="font-serif text-amber-100 truncate">{b.name}</span>
                           <span className="text-amber-400 font-semibold text-sm shrink-0">
-                            {Math.round(b.rating)}
+                            {eloToDisplayRating(b.rating)}
                           </span>
                         </div>
                         <div className="flex items-center justify-between text-xs mt-0.5">
