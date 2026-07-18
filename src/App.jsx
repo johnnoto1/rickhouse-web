@@ -460,7 +460,7 @@ function Game({ session, view, goView }) {
 function Leaderboard() {
   const [rows, setRows] = useState(null);
   useEffect(() => {
-    fetchLeaderboardCatalog(supabase).then((catalog) => {
+    fetchLeaderboardCatalog(supabase, { rankableOnly: true }).then((catalog) => {
       // Children stay off the leaderboard entirely — a line and each of its
       // batch releases would otherwise show up as 3-5 near-duplicate rows
       // back to back (same name, same distillery), drowning the rest of

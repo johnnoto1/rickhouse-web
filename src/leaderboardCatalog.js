@@ -11,16 +11,28 @@
 // up a child's data for their BATCHES table). Filtering for display is the
 // caller's job; this function's job is one consistent computation over the
 // whole catalog.
+//
+// rankableOnly (catalog/ranker decoupling, 20260718000001): the leaderboard
+// itself must only ever render rankable=true bottles — pass rankableOnly:
+// true there. The bottle profile page calls this WITHOUT rankableOnly
+// (default false) deliberately: a profile page, and its BATCHES table, must
+// still show a bottle's price/VALUE even if that specific bottle (or a
+// sibling batch) isn't currently promoted into the ranker — catalog pages
+// stay wide even where the ranker itself narrows.
 import { normalizeValuePerDollar, resolvePrice } from "./tradeValue.js";
 
-export async function fetchLeaderboardCatalog(supabase) {
-  const { data } = await supabase
+export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false } = {}) {
+  let query = supabase
     .from("bottle_ratings")
     .select(
-      "bottle_id, rating, wins, losses, rounds_played, bottles(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, release_year)"
+      "bottle_id, rating, wins, losses, rounds_played, bottles!inner(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, release_year)"
     )
     .order("rating", { ascending: false })
     .limit(200);
+  if (rankableOnly) {
+    query = query.eq("bottles.rankable", true);
+  }
+  const { data } = await query;
 
   const rows = data ?? [];
   // Parent lookup for the inheritance rule — built from this same fetch,

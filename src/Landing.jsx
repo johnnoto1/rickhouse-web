@@ -11,10 +11,16 @@ export default function Landing() {
   const [rows, setRows] = useState(null);
 
   useEffect(() => {
+    // rankable=true (20260718000001, not in the original ranker-filter
+    // spec by name but flagged and applied here): this preview renders
+    // the same "top N by rating" concept as the leaderboard itself — a
+    // bottle absent from the real leaderboard shouldn't still show up
+    // here as if it were ranked.
     supabase
       .from("bottle_ratings")
       .select("rating, wins, losses, bottles!inner(name, distillery, parent_id)")
       .is("bottles.parent_id", null)
+      .eq("bottles.rankable", true)
       .order("rating", { ascending: false })
       .limit(10)
       .then(({ data }) => setRows(data ?? []));
