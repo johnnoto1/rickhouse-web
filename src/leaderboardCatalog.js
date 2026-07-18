@@ -28,7 +28,10 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
       "bottle_id, rating, wins, losses, rounds_played, bottles!inner(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, release_year)"
     )
     .order("rating", { ascending: false })
-    .limit(200);
+    // Safety ceiling only, deliberately above the full rankable catalog
+    // (269 today) so the board renders every rankable bottle; board size is
+    // governed by bottles.rankable, not this cap.
+    .limit(500);
   if (rankableOnly) {
     query = query.eq("bottles.rankable", true);
   }
