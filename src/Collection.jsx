@@ -102,7 +102,7 @@ function Shelf({ session, userId }) {
     supabase
       .from("collections")
       .select(
-        "id, added_at, status, purchase_price, acquired_date, notes, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, image_url, bottle_ratings(rating, wins, losses))"
+        "id, added_at, status, purchase_price, acquired_date, notes, designation, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, image_url, bottle_ratings(rating, wins, losses))"
       )
       .eq("user_id", userId)
       .order("added_at", { ascending: false })
@@ -597,8 +597,18 @@ function CollectionRow({ row, priceInfo, confirming, onRequestDelete, onConfirmD
           >
             {b.name}
           </Link>
-          <div className="text-[11px] uppercase tracking-widest text-stone-500 mt-0.5">
-            {b.distillery}
+          <div className="flex items-center gap-2 mt-0.5">
+            <span className="text-[11px] uppercase tracking-widest text-stone-500">
+              {b.distillery}
+            </span>
+            {/* Designation (e.g. a store-pick/batch code like "22-03") is
+                written by the shelf scan but was never shown — same tag
+                language as the scan review screen. Only when present. */}
+            {row.designation && (
+              <span className="text-[10px] uppercase tracking-wider text-amber-800 border border-amber-400 rounded px-1 shrink-0">
+                {row.designation}
+              </span>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-xs text-stone-700">
             <span className="font-semibold">{eloToDisplayRating(rating)} rating</span>

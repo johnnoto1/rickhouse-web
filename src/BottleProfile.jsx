@@ -4,6 +4,7 @@ import { supabase } from "./supabaseClient";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 import { eloToDisplayRating } from "./ratingDisplay.js";
 import ContributionGate from "./ContributionGate.jsx";
+import BottleImage from "./BottleImage.jsx";
 
 const money = (n) =>
   n.toLocaleString("en-US", { style: "currency", currency: "USD" });
@@ -36,7 +37,7 @@ export default function BottleProfile() {
 
       const { data: bottle } = await supabase
         .from("bottles")
-        .select("id, slug, name, distillery, msrp_usd, secondary_value, proof, proof_note, status, parent_id")
+        .select("id, slug, name, distillery, msrp_usd, secondary_value, proof, proof_note, status, parent_id, image_url")
         .eq("slug", slug)
         .maybeSingle();
 
@@ -192,6 +193,13 @@ function Profile({ session, bottle, rating, snapshots, value, price, priceTag, p
   return (
     <>
       <header className="text-center mb-8">
+        {/* The one surface where the image can breathe — larger, centered
+            above the name. Placeholder fallback handled by BottleImage. */}
+        <BottleImage
+          bottle={bottle}
+          rating={rating.rating}
+          className="w-28 h-28 sm:w-32 sm:h-32 rounded-lg mx-auto mb-4 block text-3xl"
+        />
         <h1 className="font-serif text-4xl sm:text-5xl text-amber-200 leading-tight">
           {bottle.name}
         </h1>

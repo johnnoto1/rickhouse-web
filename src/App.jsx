@@ -6,6 +6,7 @@ import Collection from "./Collection";
 import Landing from "./Landing";
 import BottleProfile from "./BottleProfile";
 import AddEmail from "./AddEmail";
+import BottleImage from "./BottleImage.jsx";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 import { eloToDisplayRating } from "./ratingDisplay.js";
 
@@ -126,6 +127,24 @@ function Game({ session, view, goView }) {
   const [typeFilters, setTypeFilters] = useState({ bourbon: true, rye: true, other: true });
 
   const isAnon = session?.user?.is_anonymous === true;
+
+  // Bottle images for the rank cards. /deal and /swap were built before
+  // images existed and their bottle payloads carry no image_url (verified in
+  // whiskey-elo deal/swap index.ts), so — without touching those functions —
+  // we join image_url client-side by bottle_id against the shared leaderboard
+  // catalog (which now selects image_url). Missing/unknown id → null → the
+  // BottleImage placeholder, same fallback as everywhere else.
+  const [imageUrlById, setImageUrlById] = useState(() => new Map());
+  useEffect(() => {
+    let cancelled = false;
+    fetchLeaderboardCatalog(supabase).then((catalog) => {
+      if (cancelled) return;
+      setImageUrlById(new Map(catalog.map((c) => [c.bottle_id, c.bottles?.image_url ?? null])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const authedFetch = (path, body) =>
     fetch(`${FN_URL}/${path}`, {
@@ -370,6 +389,11 @@ function Game({ session, view, goView }) {
                     </button>
                   )}
                   <div key={b.id} className="swapIn" style={S.labelBorder}>
+                    <BottleImage
+                      bottle={{ name: b.name, image_url: imageUrlById.get(b.id) ?? null }}
+                      rating={b.rating}
+                      className="w-14 h-14 rounded-md mx-auto mb-3 block text-lg"
+                    />
                     <div style={S.labelDistillery}>{b.distillery}</div>
                     <div style={S.labelName}>{b.name}</div>
                     <div style={S.labelMeta}>
