@@ -834,11 +834,18 @@ function Board({ title, rows, empty, sortable = false }) {
                           )}
                       </span>
                     )}
-                    {provisional && (
-                      <span style={S.rowRoundsProvisional}>prov.</span>
-                    )}
                     <span style={S.rowRecord} className="hideMobile rowRecordCell">{r.wins}–{r.losses}</span>
-                    <span style={S.rowRating} className="rowRatingCell">{eloToDisplayRating(r.rating)}</span>
+                    {/* Provisional (non-graduated, <10 rounds) is now a whisper:
+                        the rating renders muted + regular-weight instead of a
+                        "prov." token that crowded every name. Graduated rows
+                        keep the bold dark treatment. Same number, fixed-width
+                        right-aligned cell — no layout shift either way. */}
+                    <span
+                      style={provisional ? S.rowRatingProvisional : S.rowRating}
+                      className="rowRatingCell"
+                    >
+                      {eloToDisplayRating(r.rating)}
+                    </span>
                     {sortable && (
                       <span style={S.rowPrice} className="hideMobile rowPriceCell">
                         {r.price != null ? (
@@ -981,9 +988,8 @@ const S = {
   // Name + distillery share one flex-truncating group so distillery gives
   // up its width (effectively drops) well before name has to ellipsis —
   // a much higher flexShrink ratio means distillery absorbs nearly all
-  // the squeeze first. Batch badge / provisional tag are siblings OUTSIDE
-  // this group (fixed, never shrink), so they're never the thing that
-  // gets crowded out.
+  // the squeeze first. The batch badge is a sibling OUTSIDE this group
+  // (fixed, never shrink), so it's never the thing that gets crowded out.
   rowNameWrap: {
     flex: 1, minWidth: 0, display: "flex", alignItems: "baseline",
     gap: 6, overflow: "hidden",
@@ -1015,6 +1021,14 @@ const S = {
     width: 54, flexShrink: 0, textAlign: "right", fontWeight: 700,
     fontVariantNumeric: "tabular-nums",
   },
+  // Provisional whisper: same width/alignment as rowRating (no layout shift),
+  // but muted + regular weight so a not-yet-graduated bottle's rating reads as
+  // "still settling" without a "prov." label. Same muted tone as the demoted
+  // W–L record cell.
+  rowRatingProvisional: {
+    width: 54, flexShrink: 0, textAlign: "right", fontWeight: 400,
+    fontVariantNumeric: "tabular-nums", color: "#A6926B",
+  },
   rowPrice: {
     width: 70, flexShrink: 0, textAlign: "right", fontWeight: 400, fontSize: 13,
     fontVariantNumeric: "tabular-nums",
@@ -1026,9 +1040,6 @@ const S = {
   priceTagStyle: {
     fontSize: 9, color: "#B08040", marginLeft: 4,
     letterSpacing: "0.05em", textTransform: "uppercase",
-  },
-  rowRoundsProvisional: {
-    flexShrink: 0, fontSize: 9, color: "#B08040", fontStyle: "italic",
   },
   leaderFilterRow: {
     display: "flex", alignItems: "center", justifyContent: "center",
