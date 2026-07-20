@@ -320,7 +320,7 @@ export default function TradeCalculator() {
           <div className="relative h-28 flex items-center justify-center overflow-hidden">
             <div
               className="w-full max-w-md h-1.5 bg-amber-700 rounded-full relative transition-transform duration-500 motion-reduce:transition-none"
-              style={{ transform: `rotate(${-tilt}deg)` }}
+              style={{ transform: `rotate(${tilt}deg)` }}
             >
               {/* left-0/right-0, not the old -left-1/-right-1: on narrow
                   viewports the beam's max-w-md cap never engages (the line

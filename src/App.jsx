@@ -1040,7 +1040,11 @@ const CSS = `
 .batchToggleOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; }
 .batchToggleOn .batchToggleDot { background: #2A1B0C; }
 .typeChip { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 5px 13px; font-family: Georgia, serif; font-size: 10px; letter-spacing: 0.16em; font-weight: 700; text-transform: uppercase; cursor: pointer; border-radius: 999px; transition: all .15s; }
-.typeChip:hover:not(:disabled) { border-color: #B08040; color: #E8B45A; }
+/* Hover only on devices with a real hover pointer. On touch (mobile) the
+   :hover state sticks after a tap; combined with .typeChipOn's #E8B45A
+   background that made the hover's #E8B45A text gold-on-gold — the label
+   went invisible once a chip was toggled back on. */
+@media (hover: hover) { .typeChip:hover:not(:disabled) { border-color: #B08040; color: #E8B45A; } }
 .typeChip:disabled { opacity: .4; cursor: not-allowed; }
 .typeChipOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; }
 .tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible, .batchToggle:focus-visible, .typeChip:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }

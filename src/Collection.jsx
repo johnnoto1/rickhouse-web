@@ -505,6 +505,21 @@ function Shelf({ session, userId }) {
 
 const STATUS_LABELS = { sealed: "Sealed", open: "Open", finished: "Finished" };
 
+// Native min/max on a date input only mark out-of-range values :invalid and
+// block form submission — there's no form here, so those values would flow
+// straight to the DB on blur. Validate before persisting. Bounds are
+// [1950-01-01, Dec 31 of current year], which reduces to year ∈ [1950, now].
+// Validate the year numerically, not by string compare: a 5-digit year like
+// "10000" sorts *before* "2026" lexicographically and would slip through.
+function isValidAcquiredDate(value) {
+  const m = /^(\d+)-(\d{2})-(\d{2})$/.exec(value);
+  if (!m) return false;
+  const year = Number(m[1]);
+  if (year < 1950 || year > new Date().getFullYear()) return false;
+  const d = new Date(`${value}T00:00:00`);
+  return !Number.isNaN(d.getTime());
+}
+
 // One physical bottle, one row, editable inline. purchase_price/
 // acquired_date/notes save on blur (not on every keystroke — this is a
 // live DB write per field, not local-only state); status saves
@@ -613,8 +628,19 @@ function CollectionRow({ row, priceInfo, confirming, onRequestDelete, onConfirmD
         <input
           type="date"
           value={acquiredDate ?? ""}
+          min="1950-01-01"
+          max={`${new Date().getFullYear()}-12-31`}
           onChange={(e) => setAcquiredDate(e.target.value)}
-          onBlur={() => onUpdate({ acquired_date: acquiredDate === "" ? null : acquiredDate })}
+          onBlur={() => {
+            if (acquiredDate === "") {
+              onUpdate({ acquired_date: null });
+            } else if (isValidAcquiredDate(acquiredDate)) {
+              onUpdate({ acquired_date: acquiredDate });
+            } else {
+              // Out of range — don't persist; revert to the last saved value.
+              setAcquiredDate(row.acquired_date ?? "");
+            }
+          }}
           aria-label={`Acquired date for ${b.name}`}
           className="bg-white border border-stone-300 rounded px-1.5 py-1 text-stone-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
         />
