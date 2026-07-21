@@ -76,6 +76,11 @@ export default function BottleProfile() {
       // child's numbers here are structurally guaranteed to match wherever
       // else this same catalog fetch is used.
       const catalogRow = catalog.find((r) => r.bottle_id === bottle.id);
+      // Virtual parent (canon-audit structural line — rankable=false with
+      // rankable children): the catalog flags it and derives its family
+      // stats. Its OWN bottle_ratings row is a stale placeholder (~1500, 0
+      // rounds), so the page must not present that as an individual rating.
+      const isVirtualParent = catalogRow?.isVirtualParent === true;
       const parentRow = bottle.parent_id
         ? catalog.find((r) => r.bottle_id === bottle.parent_id)
         : null;
@@ -91,6 +96,7 @@ export default function BottleProfile() {
         status: "ok",
         session,
         bottle,
+        isVirtualParent,
         rating: ratingRow ?? { rating: 1500, wins: 0, losses: 0, rounds_played: 0 },
         snapshots: snapshots ?? [],
         value: catalogRow?.value ?? null,
@@ -164,31 +170,47 @@ function Page({ children }) {
   );
 }
 
-function Profile({ session, bottle, rating, snapshots, value, price, priceTag, parent, batches }) {
+function Profile({ session, bottle, isVirtualParent, rating, snapshots, value, price, priceTag, parent, batches }) {
   const [openPanel, setOpenPanel] = useState(null); // null | "edit" | "price"
   const { rankNow, rankTrend } = useMemo(() => computeRankTrend(snapshots), [snapshots]);
 
   const proofDisplay =
     bottle.proof != null ? `${fmtProof(bottle.proof)} PROOF` : bottle.proof_note ?? "—";
 
-  const stats = [
-    { label: "Rating", value: eloToDisplayRating(rating.rating) },
-    {
-      label: "Rank",
-      value: rankNow != null ? `#${rankNow}` : "—",
-      trend: rankTrend,
-    },
-    { label: "W–L", value: `${rating.wins}–${rating.losses}` },
-    { label: "Rounds", value: rating.rounds_played },
-    {
-      label: "Price",
-      value: price != null ? money(price) : "—",
-      tag: priceTag,
-    },
-    { label: "MSRP", value: bottle.msrp_usd != null ? money(bottle.msrp_usd) : "—" },
-    { label: "Proof", value: proofDisplay },
-    { label: "Value", value: value != null ? value : "—" },
-  ];
+  // A virtual parent is a structural line, not an individually-ranked
+  // bottle — the crowd votes its batches, not the line itself. Drop the
+  // per-bottle vote tiles (Rating/Rank/W–L/Rounds), which would only read
+  // as a placeholder ~1500 / 0-0 / 0 rounds; keep the derived line-level
+  // Price/MSRP/Proof/Value, and point at the Batches table below.
+  const stats = isVirtualParent
+    ? [
+        {
+          label: "Price",
+          value: price != null ? money(price) : "—",
+          tag: priceTag,
+        },
+        { label: "MSRP", value: bottle.msrp_usd != null ? money(bottle.msrp_usd) : "—" },
+        { label: "Proof", value: proofDisplay },
+        { label: "Value", value: value != null ? value : "—" },
+      ]
+    : [
+        { label: "Rating", value: eloToDisplayRating(rating.rating) },
+        {
+          label: "Rank",
+          value: rankNow != null ? `#${rankNow}` : "—",
+          trend: rankTrend,
+        },
+        { label: "W–L", value: `${rating.wins}–${rating.losses}` },
+        { label: "Rounds", value: rating.rounds_played },
+        {
+          label: "Price",
+          value: price != null ? money(price) : "—",
+          tag: priceTag,
+        },
+        { label: "MSRP", value: bottle.msrp_usd != null ? money(bottle.msrp_usd) : "—" },
+        { label: "Proof", value: proofDisplay },
+        { label: "Value", value: value != null ? value : "—" },
+      ];
 
   return (
     <>
@@ -217,12 +239,25 @@ function Profile({ session, bottle, rating, snapshots, value, price, priceTag, p
             </Link>
           </div>
         )}
-        <div className="mt-7 font-serif font-bold text-amber-400 text-6xl sm:text-7xl leading-none">
-          {eloToDisplayRating(rating.rating)}
-        </div>
-        <div className="text-[11px] uppercase tracking-widest text-amber-600 mt-2">
-          Current rating
-        </div>
+        {isVirtualParent ? (
+          <>
+            <div className="mt-7 font-serif text-amber-300/90 text-2xl sm:text-3xl leading-tight">
+              Not individually ranked
+            </div>
+            <div className="text-[11px] uppercase tracking-widest text-amber-600 mt-2">
+              Ranked as a line — see batches below
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mt-7 font-serif font-bold text-amber-400 text-6xl sm:text-7xl leading-none">
+              {eloToDisplayRating(rating.rating)}
+            </div>
+            <div className="text-[11px] uppercase tracking-widest text-amber-600 mt-2">
+              Current rating
+            </div>
+          </>
+        )}
       </header>
 
       <section className="bg-amber-50 rounded-md border border-amber-200 shadow-md p-4 sm:p-5 mb-5">
