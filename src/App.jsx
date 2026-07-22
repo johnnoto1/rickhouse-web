@@ -688,6 +688,19 @@ function VoteGate({ session, imageUrlById, children }) {
 
   const gateActive = !unlocked && !failOpen && !!deal;
 
+  // Lock the page behind the modal while it's open — the blurred board is
+  // pointer-events:none, but iOS still rubber-band-scrolls the body behind a
+  // fixed overlay; freezing body overflow (plus the modal's overscroll
+  // containment) stops the scroll bleed.
+  useEffect(() => {
+    if (!gateActive) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [gateActive]);
+
   return (
     <>
       <div className={gateActive ? "gateBlurred" : undefined} aria-hidden={gateActive || undefined}>
@@ -1593,14 +1606,19 @@ const S = {
     fontSize: 13, letterSpacing: "0.3em", fontWeight: 700,
     display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
   },
+  // Sticky, not flex-pinned: the modal itself is the single scroll container
+  // (see .gateModal), so the header lives IN the scroll flow — visible at open
+  // (scrollTop 0) and staying put as the cards scroll under it. This is what
+  // makes it reachable on iOS, where the old fixed header could sit above the
+  // visible viewport with no way to scroll up to it.
   gateHead: {
-    padding: "16px 18px 12px", borderBottom: "2px solid #2A1B0C",
-    textAlign: "center", flexShrink: 0,
+    padding: "14px 18px 10px", borderBottom: "2px solid #2A1B0C",
+    textAlign: "center", position: "sticky", top: 0, background: "#F1E6CE", zIndex: 1,
   },
   gateKicker: { fontSize: 10, letterSpacing: "0.4em", color: "#A6521B", fontWeight: 700 },
   gateTitle: { fontSize: 20, fontWeight: 700, color: "#2A1B0C", marginTop: 6, lineHeight: 1.15 },
   gateSub: { fontSize: 12, color: "#7A5A2E", marginTop: 4, fontStyle: "italic" },
-  gateBody: { padding: "12px 14px 18px", overflowY: "auto" },
+  gateBody: { padding: "12px 14px 16px" },
   mapToggle: { display: "inline-flex", gap: 0, flexShrink: 0 },
   mapBody: { padding: "14px 14px 18px" },
   mapFieldRow: { display: "flex", justifyContent: "flex-end", marginBottom: 6 },
@@ -1755,9 +1773,16 @@ const CSS = `
    screens). Only the board region blurs — the header nav stays live so the
    user can leave to Rank/Trade rather than being hard-trapped. */
 .gateBlurred { filter: blur(4px); opacity: .55; pointer-events: none; user-select: none; }
-.gateOverlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(10,6,2,0.74); }
-.gateModal { background: #F1E6CE; color: #2A1B0C; border: 1px solid #8A6A3A; border-radius: 14px 14px 0 0; width: 100%; max-width: 520px; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 -10px 40px rgba(0,0,0,0.5); animation: gateUp .25s ease; }
-@media (min-width: 600px) { .gateOverlay { align-items: center; padding: 20px; } .gateModal { border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.55); } }
+/* Overlay height in dvh (not vh) so a bottom-sheet anchors to the VISIBLE
+   viewport bottom on iOS, not the taller toolbar-hidden one. vh is the
+   pre-dvh fallback. */
+.gateOverlay { position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(10,6,2,0.74); overflow: hidden; }
+/* The modal IS the scroll container that owns all its content (sticky header
+   included), capped at 100dvh, so nothing can end up above the fold with no
+   way to reach it. overscroll-behavior:contain keeps a bounce from chaining to
+   the page behind. */
+.gateModal { background: #F1E6CE; color: #2A1B0C; border: 1px solid #8A6A3A; border-radius: 14px 14px 0 0; width: 100%; max-width: 520px; max-height: 92vh; max-height: 100dvh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; box-shadow: 0 -10px 40px rgba(0,0,0,0.5); animation: gateUp .25s ease; }
+@media (min-width: 600px) { .gateOverlay { align-items: center; padding: 20px; } .gateModal { border-radius: 14px; max-height: 90dvh; box-shadow: 0 20px 50px rgba(0,0,0,0.55); } }
 @keyframes gateUp { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 .gateRedeal { background: none; border: none; color: #A6521B; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.04em; font-style: italic; cursor: pointer; padding: 6px; }
 .gateRedeal:hover { color: #7A3A10; text-decoration: underline; }

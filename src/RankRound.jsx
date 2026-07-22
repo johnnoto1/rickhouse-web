@@ -113,11 +113,15 @@ export default function RankRound({ authedFetch, initialDeal, imageUrlById, onCo
                 <BottleImage
                   bottle={{ name: b.name, image_url: imageUrlById?.get(b.id) ?? null }}
                   rating={b.rating}
-                  className="w-12 h-12 rounded-md mx-auto mb-2 block text-base"
+                  className="w-9 h-9 rounded-md mx-auto mb-1.5 block text-sm"
                 />
                 <div style={S.dist}>{b.distillery}</div>
-                <div style={S.name}>{b.name}</div>
-                <div style={S.meta}>{b.proof ? `${b.proof} PROOF` : "PROOF N/A"}</div>
+                {/* Name + proof on one line; proof omitted entirely when null
+                    (no "PROOF N/A"). */}
+                <div style={S.name}>
+                  {b.name}
+                  {b.proof != null && <span style={S.proofInline}> · {b.proof} PROOF</span>}
+                </div>
                 <div style={S.ratingRow}>
                   <span style={S.ratingNum}>{eloToDisplayRating(d ? d.new_rating : b.rating)}</span>
                   <span style={S.ratingCap}>RATING</span>
@@ -166,19 +170,20 @@ export default function RankRound({ authedFetch, initialDeal, imageUrlById, onCo
 }
 
 const S = {
-  cards: { display: "flex", flexDirection: "column", gap: 10 },
-  // Tighter than the ranker's full card so three stack inside the modal.
+  cards: { display: "flex", flexDirection: "column", gap: 8 },
+  // Compact so three cards sit close to one mobile screen: small monogram,
+  // tight padding, name+proof on one line. Role buttons stay full-size.
   cardInner: {
-    border: "1px solid #8A6A3A", margin: 6, padding: "12px 14px",
+    border: "1px solid #8A6A3A", margin: 5, padding: "8px 12px 10px",
     textAlign: "center", display: "flex", flexDirection: "column",
   },
   dist: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E", textTransform: "uppercase" },
-  name: { fontSize: 18, fontWeight: 700, color: "#2A1B0C", margin: "6px 0 2px", lineHeight: 1.15 },
-  meta: { fontSize: 10, letterSpacing: "0.25em", color: "#7A5A2E" },
-  ratingRow: { margin: "8px 0", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
-  ratingNum: { fontSize: 24, fontWeight: 700, color: "#2A1B0C" },
+  name: { fontSize: 17, fontWeight: 700, color: "#2A1B0C", margin: "3px 0 0", lineHeight: 1.2 },
+  proofInline: { fontSize: 11, fontWeight: 400, letterSpacing: "0.08em", color: "#7A5A2E" },
+  ratingRow: { margin: "5px 0 7px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
+  ratingNum: { fontSize: 22, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 8, letterSpacing: "0.3em", color: "#7A5A2E" },
-  btnRow: { display: "flex", gap: 6, marginTop: 4 },
+  btnRow: { display: "flex", gap: 6, marginTop: "auto" },
   footer: { textAlign: "center", marginTop: 14, minHeight: 30, display: "flex", alignItems: "center", justifyContent: "center" },
   done: { fontSize: 13, color: "#3E7C4F", fontStyle: "italic", fontWeight: 700 },
   hint: { fontSize: 13, color: "#C9A96E", fontStyle: "italic" },
