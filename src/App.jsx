@@ -703,15 +703,16 @@ function VoteGate({ session, imageUrlById, children }) {
 
   return (
     <>
-      {/* width:100% is load-bearing: Shell's column is align-items:center, so
-          without an explicit width this wrapper shrinks to its content's
-          max-content (the board's nowrap rows, ~608px), and the board's
-          <main> (width:100%) then resolves against THAT instead of the
-          viewport — clipping the table on mobile. Pinning the wrapper to 100%
-          keeps <main> at viewport width, same as an unwrapped board. */}
+      {/* This wrapper interposes between Shell's centering column
+          (align-items:center) and the board's <main>, so it has to REPLICATE
+          that centering itself — otherwise <main> loses it. width:100% (not
+          shrink-to-fit) keeps <main> at viewport width on mobile so the nowrap
+          rows don't blow it out to their max-content (~608px) and clip the
+          table; flex-column + align-items:center re-centers <main> (capped at
+          its own max-width) on desktop, matching the pre-gate baseline. */}
       <div
         className={gateActive ? "gateBlurred" : undefined}
-        style={{ width: "100%" }}
+        style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center" }}
         aria-hidden={gateActive || undefined}
       >
         {children}
