@@ -2,13 +2,31 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { eloToDisplayRating } from "./ratingDisplay.js";
+import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 import medalsHeroWebp from "./assets/medals-hero.webp";
 import medalsHeroJpg from "./assets/medals-hero-fallback.jpg";
 import medalsHeroMobileWebp from "./assets/medals-hero-mobile.webp";
 import medalsHeroMobileJpg from "./assets/medals-hero-mobile-fallback.jpg";
 
+// Graduated floor — the same rounds_played >= 10 the leaderboard uses to gate
+// "provisional" (App.jsx). A rail must not surface a seed-prior bottle that
+// hasn't actually earned its number.
+const GRADUATED_MIN_ROUNDS = 10;
+const RAIL_SIZE = 5;
+// Delta green, matching the ranker's rating-delta treatment (App.jsx uses
+// #3E7C4F for a positive display-rating change). Heating Up has no fallers.
+const DELTA_GREEN = "#3E7C4F";
+
+const isoDaysAgo = (n) =>
+  new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+const fmtMoney = (n) => "$" + Math.round(n).toLocaleString("en-US");
+
 export default function Landing() {
   const [rows, setRows] = useState(null);
+  // Rails hydrate AFTER auth (rating_snapshots is authenticated-read); null =
+  // still loading, [] = loaded-but-nothing-qualifies (rail hides).
+  const [heatingUp, setHeatingUp] = useState(null);
+  const [bestValue, setBestValue] = useState(null);
 
   useEffect(() => {
     // rankable=true (20260718000001, not in the original ranker-filter
@@ -16,6 +34,10 @@ export default function Landing() {
     // the same "top N by rating" concept as the leaderboard itself — a
     // bottle absent from the real leaderboard shouldn't still show up
     // here as if it were ranked.
+    //
+    // Deliberately NOT gated on auth: this (and the hero) must paint on the
+    // first frame. bottle_ratings/bottles are anon-readable, so TOP OF THE
+    // BOARD renders immediately; the rails below hydrate separately.
     supabase
       .from("bottle_ratings")
       .select("rating, wins, losses, bottles!inner(name, distillery, parent_id)")
@@ -24,6 +46,113 @@ export default function Landing() {
       .order("rating", { ascending: false })
       .limit(10)
       .then(({ data }) => setRows(data ?? []));
+  }, []);
+
+  // Engagement rails — hydrated async so they never block first paint. They
+  // live BELOW the hero, so appearing pushes the banner/feature cards down,
+  // never the hero. rating_snapshots needs an authenticated session (anon is
+  // revoked), so ensure one first; any failure leaves the rails hidden.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      let { data: sess } = await supabase.auth.getSession();
+      if (!sess.session) {
+        const { data } = await supabase.auth.signInAnonymously();
+        sess = { session: data.session };
+      }
+      if (cancelled || !sess.session) {
+        // No session → rails simply never appear (fail closed on the rails
+        // only; the rest of the page is unaffected).
+        if (!cancelled) {
+          setHeatingUp([]);
+          setBestValue([]);
+        }
+        return;
+      }
+
+      const [catalog, snapRes] = await Promise.all([
+        fetchLeaderboardCatalog(supabase, { rankableOnly: true }),
+        supabase
+          .from("rating_snapshots")
+          .select("bottle_id, snap_date, rating")
+          .gte("snap_date", isoDaysAgo(8)),
+      ]);
+      if (cancelled) return;
+
+      // Parents-only, same fold as TOP OF THE BOARD and the leaderboard.
+      const parents = catalog.filter((r) => r.bottles?.parent_id == null);
+
+      // --- Best Value: rating-per-dollar leaders, real secondary only ---
+      // priceTag "MSRP" = MSRP fallback (understated street price → fake
+      // value); exclude it so the rail can't crown an unpriced bottle. Own
+      // secondary (null tag) and inherited LINE PRICE both count.
+      const bv = parents
+        .filter(
+          (r) =>
+            r.priceTag !== "MSRP" &&
+            (r.rounds_played ?? 0) >= GRADUATED_MIN_ROUNDS &&
+            r.value != null
+        )
+        .sort((a, b) => b.value - a.value)
+        .slice(0, RAIL_SIZE)
+        .map((r) => ({
+          slug: r.bottles?.slug,
+          name: r.bottles?.name,
+          distillery: r.bottles?.distillery,
+          main: String(r.value),
+          sub: r.price != null ? fmtMoney(r.price) : null,
+        }));
+      setBestValue(bv);
+
+      // --- Heating Up: recent display-rating gainers (no fallers) ---
+      const parentById = new Map(parents.map((r) => [r.bottle_id, r]));
+      const byBottle = new Map();
+      for (const s of snapRes.data ?? []) {
+        const list = byBottle.get(s.bottle_id);
+        if (list) list.push(s);
+        else byBottle.set(s.bottle_id, [s]);
+      }
+      const cutoff = isoDaysAgo(7); // prior = closest snapshot at/before 7d ago
+      const hu = [];
+      for (const [bid, list] of byBottle) {
+        const p = parentById.get(bid);
+        if (!p || (p.rounds_played ?? 0) < GRADUATED_MIN_ROUNDS) continue;
+        if (list.length < 2) continue;
+        list.sort((a, b) => (a.snap_date < b.snap_date ? -1 : 1));
+        const latest = list[list.length - 1];
+        // Closest snapshot dated on/before the 7-day cutoff; if the whole
+        // window is younger than 7 days (young board), fall back to the
+        // earliest snapshot we have, so movement still shows.
+        let prior = null;
+        for (const s of list) if (s.snap_date <= cutoff) prior = s;
+        if (!prior) prior = list[0];
+        if (prior.snap_date === latest.snap_date) continue;
+        const gain =
+          eloToDisplayRating(latest.rating) - eloToDisplayRating(prior.rating);
+        if (gain > 0) {
+          hu.push({
+            slug: p.bottles?.slug,
+            name: p.bottles?.name,
+            distillery: p.bottles?.distillery,
+            gain,
+          });
+        }
+      }
+      hu.sort((a, b) => b.gain - a.gain);
+      setHeatingUp(
+        hu.slice(0, RAIL_SIZE).map((r) => ({
+          slug: r.slug,
+          name: r.name,
+          distillery: r.distillery,
+          main: "+" + r.gain,
+          mainColor: DELTA_GREEN,
+          sub: null,
+        }))
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -143,6 +272,15 @@ export default function Landing() {
           </div>
         </div>
 
+        {/* Engagement rails — hydrate after auth; each hides entirely when
+            nothing qualifies. Rendered below the hero so they never shift it. */}
+        {((heatingUp?.length ?? 0) > 0 || (bestValue?.length ?? 0) > 0) && (
+          <div className="mt-8 grid sm:grid-cols-2 gap-5">
+            {heatingUp?.length > 0 && <RailCard title="HEATING UP" rows={heatingUp} />}
+            {bestValue?.length > 0 && <RailCard title="BEST VALUE" rows={bestValue} />}
+          </div>
+        )}
+
         {/* Banner strip */}
         <Link
           to="/rank"
@@ -183,6 +321,58 @@ export default function Landing() {
         <footer className="text-center py-8 mt-4 text-[10px] tracking-[0.35em] text-[#7A5A2E]">
           AGED IN CHARRED OAK · RATINGS BY ELO
         </footer>
+      </div>
+    </div>
+  );
+}
+
+// A front-page engagement rail — same parchment card language as TOP OF THE
+// BOARD. Rows are tappable through to the bottle profile. `rows` items:
+// { slug, name, distillery, main, mainColor?, sub? }.
+function RailCard({ title, rows }) {
+  return (
+    <div
+      data-rail={title}
+      className="min-w-0 bg-[#F1E6CE] border border-[#8A6A3A]"
+      style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
+    >
+      <div className="px-[18px] py-[14px] border-b-2 border-[#2A1B0C] text-[13px] tracking-[0.3em] font-bold text-[#2A1B0C]">
+        {title}
+      </div>
+      <div>
+        {rows.map((r, i) => {
+          const Row = r.slug ? Link : "div";
+          const rowProps = r.slug ? { to: `/bottle/${r.slug}` } : {};
+          return (
+            <Row
+              key={i}
+              {...rowProps}
+              className="flex items-center gap-[10px] px-[18px] py-[9px] text-[14px] text-left border-b border-[rgba(42,27,12,0.15)] no-underline hover:bg-[rgba(232,180,90,0.18)] focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
+              style={i % 2 === 0 ? { background: "rgba(42,27,12,0.03)" } : undefined}
+            >
+              <span className="w-[22px] shrink-0 font-bold text-[#A6521B]">{i + 1}</span>
+              <span className="flex-1 min-w-0 font-semibold text-[#2A1B0C] truncate">
+                {r.name}
+                {r.distillery && (
+                  <span className="font-normal text-[11px] text-[#7A5A2E] ml-1.5">
+                    {r.distillery}
+                  </span>
+                )}
+              </span>
+              <span className="shrink-0 text-right leading-tight">
+                <span
+                  className="block font-bold tabular-nums"
+                  style={{ color: r.mainColor ?? "#2A1B0C" }}
+                >
+                  {r.main}
+                </span>
+                {r.sub && (
+                  <span className="block text-[11px] text-[#7A5A2E] tabular-nums">{r.sub}</span>
+                )}
+              </span>
+            </Row>
+          );
+        })}
       </div>
     </div>
   );
