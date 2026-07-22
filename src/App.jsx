@@ -9,6 +9,7 @@ import AddEmail from "./AddEmail";
 import BottleImage from "./BottleImage.jsx";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 import { eloToDisplayRating, DISPLAY_MAX } from "./ratingDisplay.js";
+import RankRound from "./RankRound.jsx";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -494,6 +495,9 @@ function Leaderboard({ session }) {
   // the parents-only map (the board never shows the child as its own row).
   const [childParentId, setChildParentId] = useState(() => new Map());
   const [ownedBottleIds, setOwnedBottleIds] = useState(() => new Set());
+  // bottle_id -> image_url, for the vote gate's round cards (deal payloads
+  // carry no image_url, same client-side join Game does).
+  const [imageUrlById, setImageUrlById] = useState(() => new Map());
 
   useEffect(() => {
     fetchLeaderboardCatalog(supabase, { rankableOnly: true }).then((catalog) => {
@@ -502,6 +506,7 @@ function Leaderboard({ session }) {
         if (r.bottles?.parent_id) cp.set(r.bottle_id, r.bottles.parent_id);
       }
       setChildParentId(cp);
+      setImageUrlById(new Map(catalog.map((c) => [c.bottle_id, c.bottles?.image_url ?? null])));
       // Children stay off the leaderboard entirely — a line and each of its
       // batch releases would otherwise show up as 3-5 near-duplicate rows
       // back to back (same name, same distillery), drowning the rest of
@@ -591,10 +596,128 @@ function Leaderboard({ session }) {
     </div>
   );
 
-  return mode === "table" ? (
-    <Board title="BARREL RANKINGS" rows={rows} sortable headerRight={toggle} />
-  ) : (
-    <ValueMap title="BARREL RANKINGS" rows={rows} ownedParentIds={ownedParentIds} headerRight={toggle} />
+  // One vote gate wraps BOTH modes, so first-visit gating and the session
+  // unlock are shared across Table, Map, and the ?view=map entry (all of them
+  // are this single Leaderboard mount). Toggling Table↔Map swaps the children
+  // but never remounts the gate.
+  return (
+    <VoteGate session={session} imageUrlById={imageUrlById}>
+      {mode === "table" ? (
+        <Board title="BARREL RANKINGS" rows={rows} sortable headerRight={toggle} />
+      ) : (
+        <ValueMap title="BARREL RANKINGS" rows={rows} ownedParentIds={ownedParentIds} headerRight={toggle} />
+      )}
+    </VoteGate>
+  );
+}
+
+// ---------------- Vote gate ----------------
+// KTC-style first-visit gate: the board renders blurred behind a modal holding
+// one real keep/trade/cut round. Completing the round writes a real vote and
+// unlocks the board for the browser session (sessionStorage). Fail-open: any
+// deal error, or a deal with fewer than three bottles, shows the board with no
+// gate at all. /bottle/:slug is a separate route and is never wrapped by this.
+const VOTE_GATE_KEY = "rh_vote_gate_v1";
+
+function VoteGate({ session, imageUrlById, children }) {
+  const [unlocked, setUnlocked] = useState(() => {
+    try {
+      return sessionStorage.getItem(VOTE_GATE_KEY) === "done";
+    } catch {
+      return false;
+    }
+  });
+  const [deal, setDeal] = useState(null); // the trio to vote on (null until dealt)
+  const [failOpen, setFailOpen] = useState(false); // deal errored/empty → no gate
+
+  const authedFetch = useMemo(
+    () => (path, body) =>
+      fetch(`${FN_URL}/${path}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      }).then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
+        return data;
+      }),
+    [session?.access_token]
+  );
+
+  // Deal FIRST, blur on success: this way the common fail-open path (deal
+  // error / empty) never flashes a gate — the board simply stays visible.
+  // A plain cancelled flag (no mount-once ref) is what keeps this correct
+  // under StrictMode's mount→unmount→remount: run 1's fetch is cancelled by
+  // cleanup, run 2 re-deals and keeps the result. A ref guard would let run 2
+  // bail while run 1's result is already discarded, and the gate would never
+  // arm. Deal is idempotent (it doesn't write a round), so the extra dev-only
+  // call is harmless.
+  useEffect(() => {
+    if (unlocked) return;
+    if (!session?.access_token) {
+      setFailOpen(true);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const d = await authedFetch("deal", { batch_mode: false });
+        if (cancelled) return;
+        if (d?.bottles?.length >= 3) setDeal(d);
+        else setFailOpen(true);
+      } catch {
+        if (!cancelled) setFailOpen(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unlocked, authedFetch, session?.access_token]);
+
+  const onComplete = useCallback(() => {
+    try {
+      sessionStorage.setItem(VOTE_GATE_KEY, "done");
+    } catch {
+      /* private mode / storage disabled — unlock for this mount anyway */
+    }
+    setUnlocked(true);
+  }, []);
+
+  const gateActive = !unlocked && !failOpen && !!deal;
+
+  return (
+    <>
+      <div className={gateActive ? "gateBlurred" : undefined} aria-hidden={gateActive || undefined}>
+        {children}
+      </div>
+      {gateActive && (
+        <div
+          className="gateOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cast a vote to see the rankings"
+        >
+          <div className="gateModal">
+            <div style={S.gateHead}>
+              <div style={S.gateKicker}>ONE POUR TO ENTER</div>
+              <div style={S.gateTitle}>Cast a vote to see the rankings</div>
+              <div style={S.gateSub}>Keep the best, cut the worst.</div>
+            </div>
+            <div style={S.gateBody}>
+              <RankRound
+                authedFetch={authedFetch}
+                initialDeal={deal}
+                imageUrlById={imageUrlById}
+                onComplete={onComplete}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1470,6 +1593,14 @@ const S = {
     fontSize: 13, letterSpacing: "0.3em", fontWeight: 700,
     display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
   },
+  gateHead: {
+    padding: "16px 18px 12px", borderBottom: "2px solid #2A1B0C",
+    textAlign: "center", flexShrink: 0,
+  },
+  gateKicker: { fontSize: 10, letterSpacing: "0.4em", color: "#A6521B", fontWeight: 700 },
+  gateTitle: { fontSize: 20, fontWeight: 700, color: "#2A1B0C", marginTop: 6, lineHeight: 1.15 },
+  gateSub: { fontSize: 12, color: "#7A5A2E", marginTop: 4, fontStyle: "italic" },
+  gateBody: { padding: "12px 14px 18px", overflowY: "auto" },
   mapToggle: { display: "inline-flex", gap: 0, flexShrink: 0 },
   mapBody: { padding: "14px 14px 18px" },
   mapFieldRow: { display: "flex", justifyContent: "flex-end", marginBottom: 6 },
@@ -1620,6 +1751,18 @@ const CSS = `
 /* Field toggle: the backdrop layer fades; the frame/axes stay put. */
 .mapFieldLayer { transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) { .mapFieldLayer { transition: none; } }
+/* Vote gate: the board blurs behind a bottom-sheet modal (centered on wider
+   screens). Only the board region blurs — the header nav stays live so the
+   user can leave to Rank/Trade rather than being hard-trapped. */
+.gateBlurred { filter: blur(4px); opacity: .55; pointer-events: none; user-select: none; }
+.gateOverlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center; background: rgba(10,6,2,0.74); }
+.gateModal { background: #F1E6CE; color: #2A1B0C; border: 1px solid #8A6A3A; border-radius: 14px 14px 0 0; width: 100%; max-width: 520px; max-height: 92vh; display: flex; flex-direction: column; box-shadow: 0 -10px 40px rgba(0,0,0,0.5); animation: gateUp .25s ease; }
+@media (min-width: 600px) { .gateOverlay { align-items: center; padding: 20px; } .gateModal { border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.55); } }
+@keyframes gateUp { from { transform: translateY(24px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+.gateRedeal { background: none; border: none; color: #A6521B; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.04em; font-style: italic; cursor: pointer; padding: 6px; }
+.gateRedeal:hover { color: #7A3A10; text-decoration: underline; }
+.gateRedeal:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .gateModal { animation: none; } }
 .segBtn:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
 .sortHdr { background: none; border: none; padding: 0; margin: 0; font-family: inherit; font-size: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .sortHdr:hover { color: #E8B45A !important; }
