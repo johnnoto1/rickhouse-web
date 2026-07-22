@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, Fragment } from "react";
-import { Routes, Route, Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from "react";
+import { Routes, Route, Link, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { supabase, FN_URL } from "./supabaseClient";
 import TradeCalculator from "./TradeCalculator";
 import Collection from "./Collection";
@@ -8,7 +8,7 @@ import BottleProfile from "./BottleProfile";
 import AddEmail from "./AddEmail";
 import BottleImage from "./BottleImage.jsx";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
-import { eloToDisplayRating } from "./ratingDisplay.js";
+import { eloToDisplayRating, DISPLAY_MAX } from "./ratingDisplay.js";
 
 const ROLES = [
   { key: "keep", label: "KEEP" },
@@ -470,7 +470,7 @@ function Game({ session, view, goView }) {
         </main>
       )}
 
-      {view === "board" && <Leaderboard />}
+      {view === "board" && <Leaderboard session={session} />}
       {view === "upgrade" && (
         <main style={S.main}>
           <AddEmail onDone={() => goView("rank")} />
@@ -481,10 +481,27 @@ function Game({ session, view, goView }) {
 }
 
 // ---------------- Boards ----------------
-function Leaderboard() {
+function Leaderboard({ session }) {
   const [rows, setRows] = useState(null);
+  // Table (ranked list) vs Map (price × rating scatter) — two projections of
+  // the exact same parents-only board universe, toggled in the panel head.
+  // Seeded from ?view=map so the "See your shelf on the map" entry point from
+  // /collection lands directly on the Map (no extra tap).
+  const [searchParams] = useSearchParams();
+  const [mode, setMode] = useState(() => (searchParams.get("view") === "map" ? "map" : "table"));
+  // childParentId maps a rankable CHILD's bottle_id → its parent's, so a
+  // collection that contains a specific batch highlights the parent point on
+  // the parents-only map (the board never shows the child as its own row).
+  const [childParentId, setChildParentId] = useState(() => new Map());
+  const [ownedBottleIds, setOwnedBottleIds] = useState(() => new Set());
+
   useEffect(() => {
     fetchLeaderboardCatalog(supabase, { rankableOnly: true }).then((catalog) => {
+      const cp = new Map();
+      for (const r of catalog) {
+        if (r.bottles?.parent_id) cp.set(r.bottle_id, r.bottles.parent_id);
+      }
+      setChildParentId(cp);
       // Children stay off the leaderboard entirely — a line and each of its
       // batch releases would otherwise show up as 3-5 near-duplicate rows
       // back to back (same name, same distillery), drowning the rest of
@@ -524,7 +541,452 @@ function Leaderboard() {
       setRows(parentsOnly);
     });
   }, []);
-  return <Board title="BARREL RANKINGS" rows={rows} sortable />;
+
+  // The signed-in (or anonymous — guests can own a shelf too) user's
+  // collection, for the Map's highlight. Same query shape Collection.jsx uses;
+  // just the bottle_ids, since the map only needs "do they own this line."
+  const userId = session?.user?.id;
+  useEffect(() => {
+    if (!userId) return;
+    let cancelled = false;
+    supabase
+      .from("collections")
+      .select("bottle_id")
+      .eq("user_id", userId)
+      .then(({ data }) => {
+        if (!cancelled) setOwnedBottleIds(new Set((data ?? []).map((r) => r.bottle_id)));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  // Owned lines, projected onto the parents-only board: a batch the user owns
+  // maps up to its parent's id, a standalone/parent maps to itself. A board
+  // point is "yours" iff its bottle_id lands in this set.
+  const ownedParentIds = useMemo(() => {
+    const s = new Set();
+    for (const id of ownedBottleIds) s.add(childParentId.get(id) ?? id);
+    return s;
+  }, [ownedBottleIds, childParentId]);
+
+  const toggle = (
+    <div style={S.mapToggle}>
+      <button
+        type="button"
+        className={"segBtn" + (mode === "table" ? " segOn" : "")}
+        onClick={() => setMode("table")}
+        aria-pressed={mode === "table"}
+      >
+        Table
+      </button>
+      <button
+        type="button"
+        className={"segBtn" + (mode === "map" ? " segOn" : "")}
+        onClick={() => setMode("map")}
+        aria-pressed={mode === "map"}
+      >
+        Map
+      </button>
+    </div>
+  );
+
+  return mode === "table" ? (
+    <Board title="BARREL RANKINGS" rows={rows} sortable headerRight={toggle} />
+  ) : (
+    <ValueMap title="BARREL RANKINGS" rows={rows} ownedParentIds={ownedParentIds} headerRight={toggle} />
+  );
+}
+
+// ---------------- Value Map (price × rating scatter) ----------------
+// The third launch view: the same parents-only board universe as the ranked
+// table, reprojected as rating (eloToDisplayRating, the display number every
+// surface shows) against LOG price (secondary → line → MSRP, resolved once in
+// fetchLeaderboardCatalog — no parallel price math here). Price provenance is
+// encoded in the mark, not just the tooltip: a real secondary_value plots as a
+// SOLID point, an MSRP fallback as a HOLLOW one, because MSRP understates the
+// street price on hyped bottles and would otherwise drop them falsely into the
+// value corner. The signed-in user's own bottles are lifted out in gold.
+const MAP_MARGIN = { top: 20, right: 16, bottom: 34, left: 44 };
+// Human-friendly log ticks; only those inside the data's padded domain render.
+const PRICE_TICKS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
+const fmtPriceTick = (n) => (n >= 1000 ? "$" + n / 1000 + "k" : "$" + n);
+
+function ValueMap({ title, rows, ownedParentIds, headerRight }) {
+  const [w, setW] = useState(0);
+  const [active, setActive] = useState(null); // bottle_id of the tapped point
+  // Field toggle: fade the full-catalog backdrop out, leaving only the user's
+  // own points on the SAME fixed frame (geom is always full-field, below, so
+  // nothing moves or rescales). Only offered when they actually have points to
+  // isolate — backdrop-only is already the empty state.
+  const [showField, setShowField] = useState(true);
+
+  // Callback ref, not useRef + mount effect: the chart container only enters
+  // the DOM once `rows` load (before that ValueMap renders a "Loading…"
+  // branch). A one-shot mount effect would run while the ref is still null —
+  // exactly the case when you land straight on Map via ?view=map — and never
+  // attach the observer. A ref callback fires whenever the node mounts, so the
+  // observer attaches the moment the chart appears, on either path.
+  const roRef = useRef(null);
+  const chartRef = useCallback((el) => {
+    if (roRef.current) {
+      roRef.current.disconnect();
+      roRef.current = null;
+    }
+    if (el) {
+      const ro = new ResizeObserver((entries) => {
+        for (const e of entries) setW(Math.round(e.contentRect.width));
+      });
+      ro.observe(el);
+      roRef.current = ro;
+    }
+  }, []);
+
+  // Only priceable points can be placed on a log axis; every board bottle has
+  // an MSRP fallback in practice, so this drops ~nothing, but stays honest.
+  const points = useMemo(
+    () => (rows ?? []).filter((r) => r.price != null && r.price > 0),
+    [rows]
+  );
+
+  const geom = useMemo(() => {
+    if (!w || points.length === 0) return null;
+    // Near-square on a phone, widening to landscape on desktop — the vertical
+    // axis stays tall enough to read the rating spread at any width.
+    const h = Math.max(300, Math.min(Math.round(w * 0.62), 460));
+    const plotL = MAP_MARGIN.left;
+    const plotT = MAP_MARGIN.top;
+    const plotW = w - MAP_MARGIN.left - MAP_MARGIN.right;
+    const plotH = h - MAP_MARGIN.top - MAP_MARGIN.bottom;
+
+    const prices = points.map((p) => p.price);
+    const minP = Math.min(...prices);
+    const maxP = Math.max(...prices);
+    const loMin = Math.log10(minP * 0.85);
+    const loMax = Math.log10(maxP * 1.12);
+    const x = (price) => plotL + ((Math.log10(price) - loMin) / (loMax - loMin)) * plotW;
+
+    const ratings = points.map((p) => eloToDisplayRating(p.rating));
+    const maxR = Math.max(...ratings);
+    // Round the top up to a clean gridline; floor at 2000 so a flat local
+    // board (every rating 1500 → ~1202) still leaves headroom above the cloud.
+    const yMax = Math.min(DISPLAY_MAX, Math.max(2000, Math.ceil((maxR + 1) / 1000) * 1000));
+    const y = (rating) => plotT + plotH - (rating / yMax) * plotH;
+
+    const yStep = yMax <= 2000 ? 500 : 2000;
+    const yTicks = [];
+    for (let t = 0; t <= yMax; t += yStep) yTicks.push(t);
+    const xTicks = PRICE_TICKS.filter((t) => t >= minP * 0.85 && t <= maxP * 1.12);
+
+    return { h, plotL, plotT, plotW, plotH, x, y, yMax, yTicks, xTicks };
+  }, [w, points]);
+
+  const activePoint = active != null ? points.find((p) => p.bottle_id === active) : null;
+  const ownedOnBoard = useMemo(
+    () => points.filter((p) => ownedParentIds.has(p.bottle_id)),
+    [points, ownedParentIds]
+  );
+  const hasOwnedPoints = ownedOnBoard.length > 0;
+  // With no owned points, "hide field" would leave a blank chart — force the
+  // field on so the toggle can never strand the user on an empty frame.
+  const fieldShown = showField || !hasOwnedPoints;
+
+  return (
+    <main style={S.main}>
+      <div style={S.panel}>
+        <div style={S.panelHeadRow}>
+          <span>{title}</span>
+          {headerRight}
+        </div>
+
+        {rows === null && <p style={{ padding: 18 }}>Loading…</p>}
+        {rows?.length === 0 && (
+          <p style={{ padding: 18, fontSize: 14 }}>No rated bottles yet.</p>
+        )}
+
+        {rows?.length > 0 && (
+          <div style={S.mapBody}>
+            {hasOwnedPoints && (
+              <div style={S.mapFieldRow}>
+                <button
+                  type="button"
+                  className={"typeChip" + (showField ? " typeChipOn" : "")}
+                  onClick={() => setShowField((v) => !v)}
+                  aria-pressed={showField}
+                  title="Fade the full catalog in or out, leaving just your bottles"
+                >
+                  Full catalog
+                </button>
+              </div>
+            )}
+            <div ref={chartRef} style={{ position: "relative", width: "100%" }}>
+              {geom && (
+                <svg
+                  className="mapChart"
+                  width={w}
+                  height={geom.h}
+                  style={{ display: "block", touchAction: "manipulation" }}
+                  onClick={() => setActive(null)}
+                >
+                  {/* Horizontal gridlines + rating labels (recessive) */}
+                  {geom.yTicks.map((t) => (
+                    <g key={"y" + t}>
+                      <line
+                        x1={geom.plotL}
+                        y1={geom.y(t)}
+                        x2={geom.plotL + geom.plotW}
+                        y2={geom.y(t)}
+                        stroke="rgba(42,27,12,0.10)"
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={geom.plotL - 6}
+                        y={geom.y(t) + 3}
+                        textAnchor="end"
+                        fontSize="9"
+                        fontFamily="Georgia, serif"
+                        fill="#7A5A2E"
+                      >
+                        {t.toLocaleString("en-US")}
+                      </text>
+                    </g>
+                  ))}
+                  {/* X axis line + price ticks */}
+                  <line
+                    x1={geom.plotL}
+                    y1={geom.plotT + geom.plotH}
+                    x2={geom.plotL + geom.plotW}
+                    y2={geom.plotT + geom.plotH}
+                    stroke="rgba(42,27,12,0.28)"
+                    strokeWidth="1"
+                  />
+                  {geom.xTicks.map((t) => (
+                    <g key={"x" + t}>
+                      <line
+                        x1={geom.x(t)}
+                        y1={geom.plotT + geom.plotH}
+                        x2={geom.x(t)}
+                        y2={geom.plotT + geom.plotH + 4}
+                        stroke="rgba(42,27,12,0.28)"
+                        strokeWidth="1"
+                      />
+                      <text
+                        x={geom.x(t)}
+                        y={geom.plotT + geom.plotH + 16}
+                        textAnchor="middle"
+                        fontSize="9"
+                        fontFamily="Georgia, serif"
+                        fill="#7A5A2E"
+                      >
+                        {fmtPriceTick(t)}
+                      </text>
+                    </g>
+                  ))}
+                  {/* Corner cues — the value story: up-and-left is the prize */}
+                  <text
+                    x={geom.plotL + 2}
+                    y={geom.plotT + 2}
+                    textAnchor="start"
+                    fontSize="8"
+                    letterSpacing="1.5"
+                    fontFamily="Georgia, serif"
+                    fill="#A6926B"
+                  >
+                    ◤ GREAT VALUE
+                  </text>
+                  <text
+                    x={geom.plotL + geom.plotW - 2}
+                    y={geom.plotT + 2}
+                    textAnchor="end"
+                    fontSize="8"
+                    letterSpacing="1.5"
+                    fontFamily="Georgia, serif"
+                    fill="#A6926B"
+                  >
+                    TROPHY ◥
+                  </text>
+                  {/* Axis captions */}
+                  <text
+                    x={geom.plotL + geom.plotW / 2}
+                    y={geom.plotT + geom.plotH + 30}
+                    textAnchor="middle"
+                    fontSize="9"
+                    letterSpacing="2"
+                    fontFamily="Georgia, serif"
+                    fill="#7A5A2E"
+                  >
+                    PRICE (LOG)
+                  </text>
+
+                  {/* Backdrop points (not yours), drawn first so yours sit on
+                      top. Solid = real secondary price, hollow = MSRP estimate.
+                      The whole layer fades on the field toggle; geom (the
+                      frame/scales) is unaffected, so nothing moves. */}
+                  <g
+                    className="mapFieldLayer"
+                    style={{ opacity: fieldShown ? 1 : 0, pointerEvents: fieldShown ? "auto" : "none" }}
+                  >
+                    {points
+                      .filter((p) => !ownedParentIds.has(p.bottle_id))
+                      .map((p) => {
+                        const cx = geom.x(p.price);
+                        const cy = geom.y(eloToDisplayRating(p.rating));
+                        return p.priceIsFallback ? (
+                          <circle
+                            key={p.bottle_id}
+                            cx={cx}
+                            cy={cy}
+                            r="4"
+                            fill="none"
+                            stroke="#7A5A2E"
+                            strokeWidth="1.25"
+                            opacity="0.6"
+                          />
+                        ) : (
+                          <circle
+                            key={p.bottle_id}
+                            cx={cx}
+                            cy={cy}
+                            r="4"
+                            fill="#7A5A2E"
+                            opacity="0.5"
+                          />
+                        );
+                      })}
+                  </g>
+                  {/* Your bottles — gold, larger, ringed; still solid/hollow
+                      by price provenance so an MSRP-priced trophy isn't sold
+                      as a value even when it's yours. */}
+                  {points
+                    .filter((p) => ownedParentIds.has(p.bottle_id))
+                    .map((p) => {
+                      const cx = geom.x(p.price);
+                      const cy = geom.y(eloToDisplayRating(p.rating));
+                      return p.priceIsFallback ? (
+                        <circle
+                          key={p.bottle_id}
+                          cx={cx}
+                          cy={cy}
+                          r="6.5"
+                          fill="#F1E6CE"
+                          stroke="#E8B45A"
+                          strokeWidth="2.25"
+                        />
+                      ) : (
+                        <circle
+                          key={p.bottle_id}
+                          cx={cx}
+                          cy={cy}
+                          r="6.5"
+                          fill="#E8B45A"
+                          stroke="#2A1B0C"
+                          strokeWidth="1.25"
+                        />
+                      );
+                    })}
+                  {/* Transparent hit targets, larger than the marks so a
+                      point is tappable on a phone; owned last so they win the
+                      overlap. When the field is hidden, only owned points stay
+                      interactive (the faded backdrop shouldn't answer taps). */}
+                  {(fieldShown ? points : ownedOnBoard).map((p) => (
+                    <circle
+                      key={"hit" + p.bottle_id}
+                      cx={geom.x(p.price)}
+                      cy={geom.y(eloToDisplayRating(p.rating))}
+                      r="11"
+                      fill="transparent"
+                      style={{ cursor: "pointer" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActive((cur) => (cur === p.bottle_id ? null : p.bottle_id));
+                      }}
+                    />
+                  ))}
+                </svg>
+              )}
+
+              {geom && activePoint && (
+                <MapTooltip
+                  p={activePoint}
+                  left={geom.x(activePoint.price)}
+                  top={geom.y(eloToDisplayRating(activePoint.rating))}
+                  width={w}
+                />
+              )}
+            </div>
+
+            {/* Legend — provenance (solid/hollow) shown once, applies to both
+                the oak backdrop and the gold "yours." */}
+            <div style={S.mapLegend}>
+              <span style={S.mapLegendItem}>
+                <svg width="14" height="14" style={{ flexShrink: 0 }}>
+                  <circle cx="7" cy="7" r="4" fill="#7A5A2E" opacity="0.7" />
+                </svg>
+                Secondary price
+              </span>
+              <span style={S.mapLegendItem}>
+                <svg width="14" height="14" style={{ flexShrink: 0 }}>
+                  <circle cx="7" cy="7" r="4" fill="none" stroke="#7A5A2E" strokeWidth="1.25" />
+                </svg>
+                MSRP estimate
+              </span>
+              <span style={S.mapLegendItem}>
+                <svg width="16" height="16" style={{ flexShrink: 0 }}>
+                  <circle cx="8" cy="8" r="6" fill="#E8B45A" stroke="#2A1B0C" strokeWidth="1.25" />
+                </svg>
+                In your collection
+              </span>
+            </div>
+
+            {ownedParentIds.size === 0 ? (
+              <Link to="/collection" style={S.mapCta}>
+                Add bottles to your collection to see where yours land →
+              </Link>
+            ) : (
+              rows.every((r) => !ownedParentIds.has(r.bottle_id)) && (
+                <div style={S.mapNote}>None of your bottles are on the board yet.</div>
+              )
+            )}
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
+
+// Tooltip card for a tapped/hovered point. Positioned in the container's pixel
+// space (the svg is drawn at exactly the container width, so point coords map
+// 1:1), clamped to stay on-screen, and is itself a link to the bottle profile
+// — same "the whole thing is tappable to /bottle/:slug" rule as a board row.
+function MapTooltip({ p, left, top, width }) {
+  const CARD_W = 168;
+  const clampedLeft = Math.max(6, Math.min(left - CARD_W / 2, width - CARD_W - 6));
+  const below = top < 110;
+  const style = {
+    ...S.mapTip,
+    width: CARD_W,
+    left: clampedLeft,
+    top: below ? top + 16 : undefined,
+    bottom: below ? undefined : "calc(100% - " + (top - 12) + "px)",
+  };
+  const slug = p.bottles?.slug;
+  const Tag = slug ? Link : "div";
+  const tagProps = slug ? { to: `/bottle/${slug}` } : {};
+  return (
+    <Tag {...tagProps} style={style} onClick={(e) => e.stopPropagation()}>
+      <div style={S.mapTipName}>{p.bottles?.name}</div>
+      {p.bottles?.distillery && <div style={S.mapTipDist}>{p.bottles.distillery}</div>}
+      <div style={S.mapTipStats}>
+        <span style={S.mapTipRating}>{eloToDisplayRating(p.rating)}</span>
+        <span style={S.mapTipPrice}>
+          {fmtMoney(p.price)}
+          {p.priceTag && <span style={S.mapTipTag}>{p.priceTag}</span>}
+        </span>
+        {p.value != null && <span style={S.mapTipValue}>VALUE {p.value}</span>}
+      </div>
+      {slug && <div style={S.mapTipLink}>View →</div>}
+    </Tag>
+  );
 }
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -536,7 +998,7 @@ const RECENT_RELEASE_MIN_YEAR = CURRENT_YEAR - 1;
 
 // Per-bottle effective price: secondary market when available, else MSRP
 // (matches the fallback rule in TradeCalculator's effectivePrice).
-function Board({ title, rows, empty, sortable = false }) {
+function Board({ title, rows, empty, sortable = false, headerRight }) {
   const [sortKey, setSortKey] = useState("rating");
   const [sortDir, setSortDir] = useState("desc");
   // Filters only ever apply to the sortable (Leaderboard) board — MyBoard
@@ -707,7 +1169,10 @@ function Board({ title, rows, empty, sortable = false }) {
   return (
     <main style={S.main}>
       <div style={S.panel}>
-        <div style={S.panelHead}>{title}</div>
+        <div style={S.panelHeadRow}>
+          <span>{title}</span>
+          {headerRight}
+        </div>
 
         {sortable && hasAnyRows && (
           <div style={S.leaderFilterRow}>
@@ -977,6 +1442,47 @@ const S = {
     padding: "14px 18px", borderBottom: "2px solid #2A1B0C",
     fontSize: 13, letterSpacing: "0.3em", fontWeight: 700,
   },
+  // Same bar as panelHead, now a flex row so a Table/Map toggle can sit
+  // right-aligned opposite the title.
+  panelHeadRow: {
+    padding: "14px 18px", borderBottom: "2px solid #2A1B0C",
+    fontSize: 13, letterSpacing: "0.3em", fontWeight: 700,
+    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+  },
+  mapToggle: { display: "inline-flex", gap: 0, flexShrink: 0 },
+  mapBody: { padding: "14px 14px 18px" },
+  mapFieldRow: { display: "flex", justifyContent: "flex-end", marginBottom: 6 },
+  mapLegend: {
+    display: "flex", flexWrap: "wrap", gap: "6px 16px", justifyContent: "center",
+    marginTop: 12, fontSize: 11, color: "#5A4526",
+  },
+  mapLegendItem: { display: "inline-flex", alignItems: "center", gap: 5 },
+  mapCta: {
+    display: "block", textAlign: "center", marginTop: 12, fontSize: 12,
+    color: "#A6521B", textDecoration: "none", fontStyle: "italic",
+  },
+  mapNote: {
+    textAlign: "center", marginTop: 12, fontSize: 12, color: "#7A5A2E", fontStyle: "italic",
+  },
+  mapTip: {
+    position: "absolute", zIndex: 3, background: "#2A1B0C", color: "#F1E6CE",
+    border: "1px solid #8A6A3A", borderRadius: 6, padding: "8px 10px",
+    boxShadow: "0 6px 18px rgba(0,0,0,0.5)", textDecoration: "none",
+    fontFamily: "Georgia, serif", boxSizing: "border-box",
+  },
+  mapTipName: { fontSize: 13, fontWeight: 700, lineHeight: 1.2, color: "#F1E6CE" },
+  mapTipDist: {
+    fontSize: 9, letterSpacing: "0.15em", textTransform: "uppercase",
+    color: "#C9A96E", marginTop: 2,
+  },
+  mapTipStats: {
+    display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "2px 10px", marginTop: 6,
+  },
+  mapTipRating: { fontSize: 15, fontWeight: 700, color: "#E8B45A", fontVariantNumeric: "tabular-nums" },
+  mapTipPrice: { fontSize: 12, color: "#F1E6CE", fontVariantNumeric: "tabular-nums" },
+  mapTipTag: { fontSize: 8, color: "#C9A96E", marginLeft: 3, letterSpacing: "0.05em", textTransform: "uppercase" },
+  mapTipValue: { fontSize: 10, color: "#C9A96E", letterSpacing: "0.08em" },
+  mapTipLink: { fontSize: 10, color: "#E8B45A", marginTop: 6, letterSpacing: "0.1em", textTransform: "uppercase" },
   // Fixed block, matching .tabOn's gold-fill/dark-numeral treatment —
   // every row gets the same contained rank cell, not just top finishers.
   rankCell: {
@@ -1083,6 +1589,17 @@ const CSS = `
 .typeChip:disabled { opacity: .4; cursor: not-allowed; }
 .typeChipOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; }
 .tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible, .batchToggle:focus-visible, .typeChip:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+/* Table/Map segmented toggle in the panel head. Small-caps pills sharing a
+   border so they read as one control; the active side takes the gold fill. */
+.segBtn { background: transparent; border: 1px solid #8A6A3A; color: #7A5A2E; padding: 4px 12px; font-family: Georgia, serif; font-size: 10px; letter-spacing: 0.18em; font-weight: 700; text-transform: uppercase; cursor: pointer; transition: all .15s; }
+.segBtn:first-child { border-radius: 999px 0 0 999px; border-right: none; }
+.segBtn:last-child { border-radius: 0 999px 999px 0; }
+.segBtn:hover:not(.segOn) { color: #2A1B0C; border-color: #2A1B0C; }
+.segOn { background: #2A1B0C; color: #E8B45A; border-color: #2A1B0C; }
+/* Field toggle: the backdrop layer fades; the frame/axes stay put. */
+.mapFieldLayer { transition: opacity .3s ease; }
+@media (prefers-reduced-motion: reduce) { .mapFieldLayer { transition: none; } }
+.segBtn:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
 .sortHdr { background: none; border: none; padding: 0; margin: 0; font-family: inherit; font-size: inherit; font-weight: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
 .sortHdr:hover { color: #E8B45A !important; }
 /* Full-width divider row, not a rotated right-edge label — the earlier

@@ -327,6 +327,20 @@ function Shelf({ session, userId }) {
               )}
             </section>
 
+            {/* Entry point to the price × rating scatter, landing straight on
+                the Map with this shelf highlighted. Only when there's a shelf
+                to show — on the map, no owned points is just the empty state. */}
+            {totalBottles > 0 && (
+              <div className="text-center mb-5 -mt-2">
+                <Link
+                  to="/leaderboard?view=map"
+                  className="text-xs uppercase tracking-widest text-amber-500 hover:text-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+                >
+                  See your shelf on the map →
+                </Link>
+              </div>
+            )}
+
             {rows.length === 0 && pendingNewBottles.length === 0 ? (
               <div className="bg-amber-50 rounded-md border border-amber-200 shadow-md p-6 text-center text-stone-700">
                 Your shelf is empty. Add what you own and see what the crowd thinks it's worth.
