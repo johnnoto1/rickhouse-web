@@ -607,7 +607,7 @@ function Leaderboard({ session }) {
 // SOLID point, an MSRP fallback as a HOLLOW one, because MSRP understates the
 // street price on hyped bottles and would otherwise drop them falsely into the
 // value corner. The signed-in user's own bottles are lifted out in gold.
-const MAP_MARGIN = { top: 20, right: 16, bottom: 34, left: 44 };
+const MAP_MARGIN = { top: 24, right: 16, bottom: 34, left: 44 };
 // Human-friendly log ticks; only those inside the data's padded domain render.
 const PRICE_TICKS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 const fmtPriceTick = (n) => (n >= 1000 ? "$" + n / 1000 + "k" : "$" + n);
@@ -668,9 +668,14 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
 
     const ratings = points.map((p) => eloToDisplayRating(p.rating));
     const maxR = Math.max(...ratings);
-    // Round the top up to a clean gridline; floor at 2000 so a flat local
-    // board (every rating 1500 → ~1202) still leaves headroom above the cloud.
-    const yMax = Math.min(DISPLAY_MAX, Math.max(2000, Math.ceil((maxR + 1) / 1000) * 1000));
+    // Clean-gridline top with GUARANTEED headroom: keep the tallest point at
+    // ≤90% of the axis (maxR / 0.9) so it never crowds the top-corner cues,
+    // regardless of where maxR happens to fall relative to a round thousand
+    // (a plain ceil-to-1000 gave almost none when maxR sat just under one —
+    // e.g. prod's ~8600 → 9000, only 4% clear). Floored at 2000 so the flat
+    // local board (every rating 1500 → ~1202) still has room; clamped to the
+    // display ceiling.
+    const yMax = Math.min(DISPLAY_MAX, Math.max(2000, Math.ceil(maxR / 0.9 / 1000) * 1000));
     const y = (rating) => plotT + plotH - (rating / yMax) * plotH;
 
     const yStep = yMax <= 2000 ? 500 : 2000;
@@ -782,10 +787,13 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                       </text>
                     </g>
                   ))}
-                  {/* Corner cues — the value story: up-and-left is the prize */}
+                  {/* Corner cues — the value story: up-and-left is the prize.
+                      Seated in the top margin, above the plot area, so the
+                      tallest point (bounded ≤90% up the axis) can never crowd
+                      them. */}
                   <text
                     x={geom.plotL + 2}
-                    y={geom.plotT + 2}
+                    y={geom.plotT - 7}
                     textAnchor="start"
                     fontSize="8"
                     letterSpacing="1.5"
@@ -796,7 +804,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                   </text>
                   <text
                     x={geom.plotL + geom.plotW - 2}
-                    y={geom.plotT + 2}
+                    y={geom.plotT - 7}
                     textAnchor="end"
                     fontSize="8"
                     letterSpacing="1.5"
@@ -805,7 +813,8 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                   >
                     TROPHY ◥
                   </text>
-                  {/* Axis captions */}
+                  {/* Axis captions — X below, Y rotated up the left gutter,
+                      same size/casing/color. */}
                   <text
                     x={geom.plotL + geom.plotW / 2}
                     y={geom.plotT + geom.plotH + 30}
@@ -816,6 +825,18 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                     fill="#7A5A2E"
                   >
                     PRICE (LOG)
+                  </text>
+                  <text
+                    transform={`rotate(-90 11 ${geom.plotT + geom.plotH / 2})`}
+                    x={11}
+                    y={geom.plotT + geom.plotH / 2}
+                    textAnchor="middle"
+                    fontSize="9"
+                    letterSpacing="2"
+                    fontFamily="Georgia, serif"
+                    fill="#7A5A2E"
+                  >
+                    RATING
                   </text>
 
                   {/* Backdrop points (not yours), drawn first so yours sit on
