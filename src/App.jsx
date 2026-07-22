@@ -703,7 +703,17 @@ function VoteGate({ session, imageUrlById, children }) {
 
   return (
     <>
-      <div className={gateActive ? "gateBlurred" : undefined} aria-hidden={gateActive || undefined}>
+      {/* width:100% is load-bearing: Shell's column is align-items:center, so
+          without an explicit width this wrapper shrinks to its content's
+          max-content (the board's nowrap rows, ~608px), and the board's
+          <main> (width:100%) then resolves against THAT instead of the
+          viewport — clipping the table on mobile. Pinning the wrapper to 100%
+          keeps <main> at viewport width, same as an unwrapped board. */}
+      <div
+        className={gateActive ? "gateBlurred" : undefined}
+        style={{ width: "100%" }}
+        aria-hidden={gateActive || undefined}
+      >
         {children}
       </div>
       {gateActive && (
