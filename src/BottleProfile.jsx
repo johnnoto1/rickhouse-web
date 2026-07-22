@@ -222,7 +222,7 @@ function Profile({ session, bottle, isVirtualParent, rating, snapshots, value, p
           bottle={bottle}
           rating={rating.rating}
           className="w-28 h-28 sm:w-32 sm:h-32 rounded-lg mx-auto mb-4 block text-3xl"
-          imageClassName="w-36 h-48 sm:w-44 sm:h-56 rounded-lg mx-auto mb-4 block"
+          imageClassName="w-48 h-64 sm:w-64 sm:h-80 rounded-lg mx-auto mb-4 block"
         />
         <h1 className="font-serif text-4xl sm:text-5xl text-amber-200 leading-tight">
           {bottle.name}

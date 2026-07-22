@@ -368,6 +368,53 @@ function Game({ session, view, goView }) {
             {(deal?.bottles ?? []).map((b, idx) => {
               const role = picks[b.id];
               const d = result?.deltas?.[b.id];
+              const imgUrl = imageUrlById.get(b.id) ?? null;
+              const proofText =
+                deal?.batch_mode && b.parent_name
+                  ? `PART OF ${b.parent_name.toUpperCase()}`
+                  : b.proof
+                  ? `${b.proof} PROOF`
+                  : "PROOF N/A";
+              // Rating + delta content, shared by both card layouts. d.change is
+              // the raw ELO delta the server returned; re-derive the pre-round
+              // ELO from it so the shown delta is the SAME transform applied to
+              // both ends, not a raw-scale number beside a display-scale rating.
+              const ratingContent = (
+                <>
+                  <span style={S.ratingNum}>
+                    {eloToDisplayRating(d ? d.new_rating : b.rating)}
+                  </span>
+                  <span style={S.ratingCap}>RATING</span>
+                  {d && (() => {
+                    const displayDelta =
+                      eloToDisplayRating(d.new_rating) -
+                      eloToDisplayRating(d.new_rating - d.change);
+                    return (
+                      <span
+                        className="delta"
+                        style={{ color: displayDelta >= 0 ? "#3E7C4F" : "#A03325" }}
+                      >
+                        {displayDelta >= 0 ? "+" : ""}
+                        {displayDelta}
+                      </span>
+                    );
+                  })()}
+                </>
+              );
+              const roleButtons = (
+                <div style={S.btnRow}>
+                  {ROLES.map((r) => (
+                    <button
+                      key={r.key}
+                      className={"roleBtn roleBtn-" + r.key + (role === r.key ? " roleOn" : "")}
+                      disabled={!!result || busy}
+                      onClick={() => assign(b.id, r.key)}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              );
               return (
                 <div
                   key={idx}
@@ -389,63 +436,43 @@ function Game({ session, view, goView }) {
                       {swappingSlot === idx ? "…" : "×"}
                     </button>
                   )}
-                  <div key={b.id} className="swapIn" style={S.labelBorder}>
-                    <BottleImage
-                      bottle={{ name: b.name, image_url: imageUrlById.get(b.id) ?? null }}
-                      rating={b.rating}
-                      className="w-14 h-14 rounded-md mx-auto mb-3 block text-lg"
-                    />
-                    <div style={S.labelDistillery}>{b.distillery}</div>
-                    <div style={S.labelName}>{b.name}</div>
-                    <div style={S.labelMeta}>
-                      {deal?.batch_mode && b.parent_name
-                        ? `PART OF ${b.parent_name.toUpperCase()}`
-                        : b.proof
-                        ? `${b.proof} PROOF`
-                        : "PROOF N/A"}
+                  {imgUrl ? (
+                    // Photo card: large bottle anchored left, text in a right
+                    // column (never under the bottle), buttons full-width at the
+                    // card bottom. Card stretches to the row height (grid) so it
+                    // lines up with placeholder cards; buttons pin to the bottom.
+                    <div key={b.id} className="swapIn" style={S.photoInner}>
+                      <div style={S.photoTop}>
+                        <BottleImage
+                          bottle={{ name: b.name, image_url: imgUrl }}
+                          rating={b.rating}
+                          imageClassName="w-20 h-56 sm:w-24 sm:h-64 rounded-md block shrink-0"
+                        />
+                        <div style={S.photoText}>
+                          <div style={S.labelDistilleryL}>{b.distillery}</div>
+                          <div style={S.labelNameL}>{b.name}</div>
+                          <div style={S.labelMetaL}>{proofText}</div>
+                          <div style={S.labelRatingL}>{ratingContent}</div>
+                        </div>
+                      </div>
+                      {roleButtons}
                     </div>
-                    <div style={S.labelRating}>
-                      <span style={S.ratingNum}>
-                        {eloToDisplayRating(d ? d.new_rating : b.rating)}
-                      </span>
-                      <span style={S.ratingCap}>RATING</span>
-                      {d && (() => {
-                        // d.change is the raw ELO delta the server returned;
-                        // re-derive the pre-round ELO from it so the shown
-                        // delta is the SAME transform applied to both ends,
-                        // not a raw-scale number sitting next to a display-
-                        // scale rating (which is exactly the "mixed scales"
-                        // this feature exists to eliminate).
-                        const displayDelta =
-                          eloToDisplayRating(d.new_rating) -
-                          eloToDisplayRating(d.new_rating - d.change);
-                        return (
-                          <span
-                            className="delta"
-                            style={{ color: displayDelta >= 0 ? "#3E7C4F" : "#A03325" }}
-                          >
-                            {displayDelta >= 0 ? "+" : ""}
-                            {displayDelta}
-                          </span>
-                        );
-                      })()}
+                  ) : (
+                    // Placeholder card: unchanged — small centered monogram,
+                    // centered text, buttons at the bottom.
+                    <div key={b.id} className="swapIn" style={S.labelBorder}>
+                      <BottleImage
+                        bottle={{ name: b.name, image_url: null }}
+                        rating={b.rating}
+                        className="w-14 h-14 rounded-md mx-auto mb-3 block text-lg"
+                      />
+                      <div style={S.labelDistillery}>{b.distillery}</div>
+                      <div style={S.labelName}>{b.name}</div>
+                      <div style={S.labelMeta}>{proofText}</div>
+                      <div style={S.labelRating}>{ratingContent}</div>
+                      {roleButtons}
                     </div>
-                    <div style={S.btnRow}>
-                      {ROLES.map((r) => (
-                        <button
-                          key={r.key}
-                          className={
-                            "roleBtn roleBtn-" + r.key +
-                            (role === r.key ? " roleOn" : "")
-                          }
-                          disabled={!!result || busy}
-                          onClick={() => assign(b.id, r.key)}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  )}
                 </div>
               );
             })}
@@ -1598,6 +1625,24 @@ const S = {
   ratingNum: { fontSize: 30, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E" },
   btnRow: { display: "flex", gap: 6, marginTop: "auto" },
+  // Photo-card layout: same bordered inner box as labelBorder, but the top
+  // region is a left bottle + right text column (left-aligned), and the button
+  // row sits full-width at the bottom (marginTop:auto in btnRow).
+  photoInner: {
+    border: "1px solid #8A6A3A", margin: 6, padding: "14px 14px 16px",
+    display: "flex", flexDirection: "column",
+    height: "calc(100% - 12px)", boxSizing: "border-box",
+  },
+  photoTop: { display: "flex", gap: 12, marginBottom: 12 },
+  // paddingRight clears the absolute swapX in the card's top-right corner.
+  photoText: {
+    flex: 1, minWidth: 0, display: "flex", flexDirection: "column",
+    textAlign: "left", paddingRight: 18,
+  },
+  labelDistilleryL: { fontSize: 10, letterSpacing: "0.3em", color: "#7A5A2E", textTransform: "uppercase" },
+  labelNameL: { fontSize: 19, fontWeight: 700, color: "#2A1B0C", margin: "4px 0 2px", lineHeight: 1.2 },
+  labelMetaL: { fontSize: 11, letterSpacing: "0.25em", color: "#7A5A2E" },
+  labelRatingL: { margin: "8px 0 0", display: "flex", alignItems: "baseline", gap: 8 },
   swapCounter: { textAlign: "center", fontSize: 11, letterSpacing: "0.2em", color: "#7A5A2E", marginTop: 14 },
   underRow: { display: "flex", justifyContent: "center", marginTop: 24, minHeight: 48, alignItems: "center" },
   hint: { fontSize: 13, color: "#C9A96E", fontStyle: "italic", textAlign: "center" },
