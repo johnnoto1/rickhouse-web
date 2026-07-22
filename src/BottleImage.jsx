@@ -5,9 +5,20 @@
 // placeholder across a reload, not a random/hash-of-id color that would
 // make placeholders feel buggy when they don't match anything visible.
 //
-// Collection cards only for now (see 20260717000002 + the collection
-// per-row frontend pass) — App.jsx's ranker and BottleProfile are a
-// separate audit/deploy.
+// Used on every surface (ranker cards, vote-gate cards, bottle profile,
+// collection, shelf scan).
+
+// Real photos are 1000² transparent WebPs with a UNIFORM bottle height and
+// ~15% dead vertical padding (measured: bottle ≈ 83–85% of the canvas,
+// centered), plus wide horizontal padding since bottles are tall and narrow.
+// At 1:1 in a slot the bottle only fills ~85% and floats. Scaling ~1.18×
+// inside an overflow-hidden slot crops that dead margin so the bottle fills
+// the slot HEIGHT: the tallest measured bottles (85%) fill almost exactly,
+// the shortest (~83%) keep a hair of padding, and none clip the cap/base
+// (worst-case crop ~1px of the 1000px canvas at the very tip). The slot keeps
+// its caller-given size, so nothing about layout, alignment, or the
+// placeholder tiles changes — only the photo grows within its box.
+const IMAGE_ZOOM = 1.18;
 
 // Same ELO floor as tradeValue.js (bottles at/below this are worth 0 in
 // the convex formula) — reused here only as the bottom of the placeholder
@@ -36,14 +47,21 @@ function initials(name) {
 // since callers source it from different shapes (catalog rows carry a
 // flat `rating`, owned rows carry `bottle_ratings.rating`) — resolving
 // that here would mean this component needs to know both query shapes.
-export default function BottleImage({ bottle, rating, className = "" }) {
+// imageClassName (optional): the slot size for the PHOTO only — defaults to
+// className. Lets a surface grow the photo without touching the placeholder
+// size (e.g. the profile hero uses a bigger portrait slot). Placeholder
+// always uses className, so its size never changes.
+export default function BottleImage({ bottle, rating, className = "", imageClassName }) {
   if (bottle?.image_url) {
     return (
-      <img
-        src={bottle.image_url}
-        alt={bottle.name ?? ""}
-        className={`object-cover ${className}`}
-      />
+      <div className={`overflow-hidden shrink-0 ${imageClassName ?? className}`}>
+        <img
+          src={bottle.image_url}
+          alt={bottle.name ?? ""}
+          className="w-full h-full object-cover block"
+          style={{ transform: `scale(${IMAGE_ZOOM})` }}
+        />
+      </div>
     );
   }
 

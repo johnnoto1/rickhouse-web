@@ -215,12 +215,14 @@ function Profile({ session, bottle, isVirtualParent, rating, snapshots, value, p
   return (
     <>
       <header className="text-center mb-8">
-        {/* The one surface where the image can breathe — larger, centered
-            above the name. Placeholder fallback handled by BottleImage. */}
+        {/* The one surface where the image can breathe — a big portrait slot
+            for the photo (bottles are tall), while the placeholder keeps its
+            square size (imageClassName only enlarges the photo). */}
         <BottleImage
           bottle={bottle}
           rating={rating.rating}
           className="w-28 h-28 sm:w-32 sm:h-32 rounded-lg mx-auto mb-4 block text-3xl"
+          imageClassName="w-36 h-48 sm:w-44 sm:h-56 rounded-lg mx-auto mb-4 block"
         />
         <h1 className="font-serif text-4xl sm:text-5xl text-amber-200 leading-tight">
           {bottle.name}
