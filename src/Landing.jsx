@@ -3,16 +3,13 @@ import { Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { eloToDisplayRating } from "./ratingDisplay.js";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
-import medalsHeroWebp from "./assets/medals-hero.webp";
-import medalsHeroJpg from "./assets/medals-hero-fallback.jpg";
-import medalsHeroMobileWebp from "./assets/medals-hero-mobile.webp";
-import medalsHeroMobileJpg from "./assets/medals-hero-mobile-fallback.jpg";
 
 // Graduated floor — the same rounds_played >= 10 the leaderboard uses to gate
 // "provisional" (App.jsx). A rail must not surface a seed-prior bottle that
 // hasn't actually earned its number.
 const GRADUATED_MIN_ROUNDS = 10;
 const RAIL_SIZE = 5;
+const BOARD_SIZE = 5; // top-5 preview so board + rails read as one dashboard
 // Delta green, matching the ranker's rating-delta treatment (App.jsx uses
 // #3E7C4F for a positive display-rating change). Heating Up has no fallers.
 const DELTA_GREEN = "#3E7C4F";
@@ -29,29 +26,24 @@ export default function Landing() {
   const [bestValue, setBestValue] = useState(null);
 
   useEffect(() => {
-    // rankable=true (20260718000001, not in the original ranker-filter
-    // spec by name but flagged and applied here): this preview renders
-    // the same "top N by rating" concept as the leaderboard itself — a
-    // bottle absent from the real leaderboard shouldn't still show up
-    // here as if it were ranked.
-    //
-    // Deliberately NOT gated on auth: this (and the hero) must paint on the
-    // first frame. bottle_ratings/bottles are anon-readable, so TOP OF THE
-    // BOARD renders immediately; the rails below hydrate separately.
+    // rankable=true (20260718000001): same "top N by rating" concept as the
+    // leaderboard. Deliberately NOT gated on auth — this (and the hero) must
+    // paint on the first frame. bottle_ratings/bottles are anon-readable, so
+    // TOP OF THE BOARD renders immediately; the rails hydrate separately.
     supabase
       .from("bottle_ratings")
-      .select("rating, wins, losses, bottles!inner(name, distillery, parent_id)")
+      .select("rating, wins, losses, bottles!inner(slug, name, distillery, parent_id)")
       .is("bottles.parent_id", null)
       .eq("bottles.rankable", true)
       .order("rating", { ascending: false })
-      .limit(10)
+      .limit(BOARD_SIZE)
       .then(({ data }) => setRows(data ?? []));
   }, []);
 
   // Engagement rails — hydrated async so they never block first paint. They
-  // live BELOW the hero, so appearing pushes the banner/feature cards down,
-  // never the hero. rating_snapshots needs an authenticated session (anon is
-  // revoked), so ensure one first; any failure leaves the rails hidden.
+  // sit in the dashboard row BELOW the hero, so appearing never moves the hero.
+  // rating_snapshots needs an authenticated session (anon is revoked), so
+  // ensure one first; any failure leaves the rails hidden.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -61,8 +53,6 @@ export default function Landing() {
         sess = { session: data.session };
       }
       if (cancelled || !sess.session) {
-        // No session → rails simply never appear (fail closed on the rails
-        // only; the rest of the page is unaffected).
         if (!cancelled) {
           setHeatingUp([]);
           setBestValue([]);
@@ -82,29 +72,8 @@ export default function Landing() {
       // Parents-only, same fold as TOP OF THE BOARD and the leaderboard.
       const parents = catalog.filter((r) => r.bottles?.parent_id == null);
 
-      // --- Best Value: rating-per-dollar leaders, real secondary only ---
-      // priceTag "MSRP" = MSRP fallback (understated street price → fake
-      // value); exclude it so the rail can't crown an unpriced bottle. Own
-      // secondary (null tag) and inherited LINE PRICE both count.
-      const bv = parents
-        .filter(
-          (r) =>
-            r.priceTag !== "MSRP" &&
-            (r.rounds_played ?? 0) >= GRADUATED_MIN_ROUNDS &&
-            r.value != null
-        )
-        .sort((a, b) => b.value - a.value)
-        .slice(0, RAIL_SIZE)
-        .map((r) => ({
-          slug: r.bottles?.slug,
-          name: r.bottles?.name,
-          distillery: r.bottles?.distillery,
-          main: String(r.value),
-          sub: r.price != null ? fmtMoney(r.price) : null,
-        }));
-      setBestValue(bv);
-
       // --- Heating Up: recent display-rating gainers (no fallers) ---
+      // Computed FIRST so its winners can be deduped out of Best Value below.
       const parentById = new Map(parents.map((r) => [r.bottle_id, r]));
       const byBottle = new Map();
       for (const s of snapRes.data ?? []) {
@@ -113,233 +82,151 @@ export default function Landing() {
         else byBottle.set(s.bottle_id, [s]);
       }
       const cutoff = isoDaysAgo(7); // prior = closest snapshot at/before 7d ago
-      const hu = [];
+      const gains = [];
       for (const [bid, list] of byBottle) {
         const p = parentById.get(bid);
         if (!p || (p.rounds_played ?? 0) < GRADUATED_MIN_ROUNDS) continue;
         if (list.length < 2) continue;
         list.sort((a, b) => (a.snap_date < b.snap_date ? -1 : 1));
         const latest = list[list.length - 1];
-        // Closest snapshot dated on/before the 7-day cutoff; if the whole
-        // window is younger than 7 days (young board), fall back to the
-        // earliest snapshot we have, so movement still shows.
+        // Closest snapshot on/before the 7-day cutoff; if the whole window is
+        // younger than 7 days (young board), fall back to the earliest we have.
         let prior = null;
         for (const s of list) if (s.snap_date <= cutoff) prior = s;
         if (!prior) prior = list[0];
         if (prior.snap_date === latest.snap_date) continue;
         const gain =
           eloToDisplayRating(latest.rating) - eloToDisplayRating(prior.rating);
-        if (gain > 0) {
-          hu.push({
-            slug: p.bottles?.slug,
-            name: p.bottles?.name,
-            distillery: p.bottles?.distillery,
-            gain,
-          });
-        }
+        if (gain > 0) gains.push({ p, gain });
       }
-      hu.sort((a, b) => b.gain - a.gain);
+      gains.sort((a, b) => b.gain - a.gain);
+      const huTop = gains.slice(0, RAIL_SIZE);
+      const huIds = new Set(huTop.map((x) => x.p.bottle_id));
       setHeatingUp(
-        hu.slice(0, RAIL_SIZE).map((r) => ({
-          slug: r.slug,
-          name: r.name,
-          distillery: r.distillery,
-          main: "+" + r.gain,
+        huTop.map(({ p, gain }) => ({
+          slug: p.bottles?.slug,
+          name: p.bottles?.name,
+          distillery: p.bottles?.distillery,
+          main: "+" + gain,
           mainColor: DELTA_GREEN,
-          sub: null,
         }))
       );
+
+      // --- Best Value: rating-per-dollar leaders, real secondary only ---
+      // priceTag "MSRP" = MSRP fallback (understated street price → fake
+      // value); exclude it. Dedupe: anything already shown in Heating Up is
+      // skipped so the next value qualifier fills the slot instead.
+      const bv = parents
+        .filter(
+          (r) =>
+            r.priceTag !== "MSRP" &&
+            (r.rounds_played ?? 0) >= GRADUATED_MIN_ROUNDS &&
+            r.value != null &&
+            !huIds.has(r.bottle_id)
+        )
+        .sort((a, b) => b.value - a.value)
+        .slice(0, RAIL_SIZE)
+        .map((r) => ({
+          slug: r.bottles?.slug,
+          name: r.bottles?.name,
+          distillery: r.bottles?.distillery,
+          meta: r.price != null ? fmtMoney(r.price) : null,
+          main: String(r.value),
+        }));
+      setBestValue(bv);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
+  const boardRows = (rows ?? []).map((r) => ({
+    slug: r.bottles?.slug,
+    name: r.bottles?.name,
+    distillery: r.bottles?.distillery,
+    main: String(eloToDisplayRating(r.rating)),
+  }));
+
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#17100A_0%,#1E1409_55%,#17100A_100%)] text-[#F1E6CE] font-serif">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
 
-        {/* Brand mark */}
-        <div className="text-center sm:text-left mb-10">
-          <span className="text-[11px] uppercase tracking-[0.5em] text-[#B08040]">The</span>
-          <div
-            className="text-[clamp(28px,6vw,44px)] font-bold tracking-[0.1em] text-[#E8B45A] leading-none [text-shadow:0_2px_0_#5A3A12]"
-          >
+        {/* Compact hero band — brand + headline + CTAs, no photo. */}
+        <header className="text-center mb-6">
+          <div className="text-[10px] uppercase tracking-[0.5em] text-[#B08040]">The</div>
+          <div className="text-[clamp(24px,4vw,36px)] font-bold tracking-[0.1em] text-[#E8B45A] leading-none [text-shadow:0_2px_0_#5A3A12]">
             RICKHOUSE
           </div>
-        </div>
-
-        {/* Hero */}
-        <div className="grid lg:grid-cols-2 gap-10 items-start">
-          {/* Hero left */}
-          <div className="min-w-0 text-center lg:text-left">
-            <h1 className="text-amber-200 font-bold text-3xl sm:text-4xl leading-tight">
-              Whiskey rankings, built by the community
-            </h1>
-            <p className="mt-4 text-[#C9A96E] text-base sm:text-lg max-w-md mx-auto lg:mx-0">
-              Every rating is earned head-to-head — real drinkers voting bottle versus bottle, no critics and no paid scores.
-            </p>
-
-            <div className="mt-7 flex flex-wrap justify-center lg:justify-start gap-3">
-              <Link
-                to="/leaderboard"
-                className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm uppercase tracking-widest px-6 py-2.5"
-              >
-                Rankings
-              </Link>
-              <Link
-                to="/trade"
-                className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm uppercase tracking-widest px-6 py-2.5"
-              >
-                Trade Calculator
-              </Link>
-            </div>
-
-            <div className="mt-4 flex justify-center lg:justify-start">
-              <Link
-                to="/rank"
-                className="inline-block bg-[#E8B45A] text-[#2A1B0C] border border-[#E8B45A] font-bold uppercase tracking-[0.25em] text-xs px-7 py-3 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
-              >
-                Start Ranking
-              </Link>
-            </div>
-
-            {/* Editorial photo, filling the dead space below the CTA stack.
-                A real content image now (not a backdrop) — shown at every
-                width, just with a size-appropriate derivation: the mobile
-                <source> (700x326, ~20KB) below sm, the desktop one
-                (1200x558, ~52KB) at sm+ and up. Source photo has correct,
-                legible medal engravings, so no blur/softening is applied —
-                the medals render sharp. The mask-image below is a vignette
-                only (edge fade into the page background), not a legibility
-                treatment. width/height + h-auto reserve the aspect ratio so
-                this never causes layout shift while it loads. */}
-            <div className="mt-8">
-              <picture>
-                <source media="(min-width: 640px)" srcSet={medalsHeroWebp} type="image/webp" />
-                <source media="(min-width: 640px)" srcSet={medalsHeroJpg} type="image/jpeg" />
-                <source srcSet={medalsHeroMobileWebp} type="image/webp" />
-                <img
-                  src={medalsHeroMobileJpg}
-                  alt="Three Glencairn glasses fitted with gold, silver, and bronze medals, resting on a barrel-wood flight board"
-                  width={1200}
-                  height={558}
-                  loading="eager"
-                  className="w-full h-auto max-w-md mx-auto lg:mx-0"
-                  style={{
-                    maskImage: "radial-gradient(ellipse at center, black 45%, transparent 100%)",
-                    WebkitMaskImage: "radial-gradient(ellipse at center, black 45%, transparent 100%)",
-                  }}
-                />
-              </picture>
-            </div>
-          </div>
-
-          {/* Hero right — live top-10 preview */}
-          <div
-            className="min-w-0 bg-[#F1E6CE] border border-[#8A6A3A]"
-            style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
-          >
-            <div className="px-[18px] py-[14px] border-b-2 border-[#2A1B0C] text-[13px] tracking-[0.3em] font-bold text-[#2A1B0C]">
-              TOP OF THE BOARD
-            </div>
-            <div>
-              {rows === null && <div className="h-[420px]" />}
-              {rows?.length === 0 && (
-                <p className="px-[18px] py-6 text-[14px] text-[#2A1B0C]">
-                  No ratings yet — be the first to vote.
-                </p>
-              )}
-              {rows?.map((r, i) => (
-                <div
-                  key={i}
-                  className="flex items-baseline gap-[10px] px-[18px] py-[10px] text-[14px] text-left border-b border-[rgba(42,27,12,0.15)]"
-                  style={i % 2 === 0 ? { background: "rgba(42,27,12,0.03)" } : undefined}
-                >
-                  <span className="w-[26px] shrink-0 font-bold text-[#A6521B]">{i + 1}</span>
-                  <span className="flex-1 min-w-0 font-semibold text-[#2A1B0C] truncate">
-                    {r.bottles?.name}
-                    <span className="font-normal text-[11px] text-[#7A5A2E] ml-1.5">
-                      {r.bottles?.distillery}
-                    </span>
-                  </span>
-                  <span className="w-[56px] shrink-0 text-right font-bold text-[#2A1B0C]">
-                    {eloToDisplayRating(r.rating)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Engagement rails — hydrate after auth; each hides entirely when
-            nothing qualifies. Rendered below the hero so they never shift it. */}
-        {((heatingUp?.length ?? 0) > 0 || (bestValue?.length ?? 0) > 0) && (
-          <div className="mt-8 grid sm:grid-cols-2 gap-5">
-            {heatingUp?.length > 0 && <RailCard title="HEATING UP" rows={heatingUp} />}
-            {bestValue?.length > 0 && <RailCard title="BEST VALUE" rows={bestValue} />}
-          </div>
-        )}
-
-        {/* Banner strip */}
-        <Link
-          to="/rank"
-          className="mt-10 block text-center border-y border-[#5A3A12] py-4 text-[#C9A96E] italic text-sm hover:text-amber-200 hover:border-amber-700/60 transition focus:outline-none focus:ring-2 focus:ring-amber-500"
-        >
-          Every rating starts from a seeded baseline and moves with every vote — the board is young. Come move the numbers.
-        </Link>
-
-        {/* Feature cards */}
-        <div className="mt-10 grid sm:grid-cols-2 gap-5">
-          <div className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-5 sm:p-6 flex flex-col">
-            <h2 className="font-serif text-amber-300 text-xl">Your Collection Ranked</h2>
-            <p className="mt-2 text-amber-100/80 text-sm flex-1">
-              Plug in your bottles, see total secondary value and how the community rates what you own.
-            </p>
+          <h1 className="mt-3 text-amber-200 font-bold text-xl sm:text-2xl leading-tight">
+            Whiskey rankings, built by the community
+          </h1>
+          <p className="mt-2 text-[#C9A96E] text-sm max-w-xl mx-auto">
+            Every rating is earned head-to-head — real drinkers voting bottle versus bottle, no critics and no paid scores.
+          </p>
+          <div className="mt-4 flex flex-wrap justify-center gap-3">
             <Link
-              to="/collection"
-              className="mt-5 inline-block text-center rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm uppercase tracking-widest px-6 py-2.5"
+              to="/rank"
+              className="rounded-md bg-[#E8B45A] text-[#2A1B0C] border border-[#E8B45A] font-bold uppercase tracking-[0.25em] text-xs px-6 py-2.5 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
             >
-              Open Collection
+              Start Ranking
             </Link>
-          </div>
-
-          <div className="bg-stone-900/70 border border-amber-900/40 rounded-lg p-5 sm:p-6 flex flex-col">
-            <h2 className="font-serif text-amber-300 text-xl">Trade Calculator</h2>
-            <p className="mt-2 text-amber-100/80 text-sm flex-1">
-              Convex-value trade evaluation built on honest secondary pricing.
-            </p>
+            <Link
+              to="/leaderboard"
+              className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs uppercase tracking-widest px-6 py-2.5"
+            >
+              Rankings
+            </Link>
             <Link
               to="/trade"
-              className="mt-5 inline-block text-center rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm uppercase tracking-widest px-6 py-2.5"
+              className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs uppercase tracking-widest px-6 py-2.5"
             >
-              Open Trade Calculator
+              Trade Calculator
             </Link>
           </div>
+        </header>
+
+        {/* Dashboard — TOP OF THE BOARD + the two rails as one equal-height
+            row on desktop, stacked on mobile. Flex adapts to how many cards
+            are present (rails hide when empty), so a lone board still fills
+            the row cleanly rather than sitting at 1/3 width. */}
+        <div className="flex flex-col lg:flex-row gap-4 items-stretch">
+          <RailCard title="TOP OF THE BOARD" rows={boardRows} loading={rows === null} />
+          {heatingUp?.length > 0 && <RailCard title="HEATING UP" rows={heatingUp} />}
+          {bestValue?.length > 0 && <RailCard title="BEST VALUE" rows={bestValue} />}
         </div>
 
-        <footer className="text-center py-8 mt-4 text-[10px] tracking-[0.35em] text-[#7A5A2E]">
-          AGED IN CHARRED OAK · RATINGS BY ELO
+        {/* One-line footer inside the viewport — replaces the old banner strip
+            and the separate AGED-IN-OAK footer. */}
+        <footer className="mt-6 pt-4 border-t border-[#5A3A12]/60 text-center">
+          <Link
+            to="/rank"
+            className="text-[#C9A96E] italic text-xs hover:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+          >
+            Every rating starts from a seeded baseline and moves with every vote — the board is young. Come move the numbers.
+          </Link>
         </footer>
       </div>
     </div>
   );
 }
 
-// A front-page engagement rail — same parchment card language as TOP OF THE
-// BOARD. Rows are tappable through to the bottle profile. `rows` items:
-// { slug, name, distillery, main, mainColor?, sub? }.
-function RailCard({ title, rows }) {
+// A dashboard card — TOP OF THE BOARD and both rails share this. Rows are
+// single-line (so all three cards stay equal height) and tap through to the
+// bottle profile. `rows` items: { slug, name, distillery, meta?, main, mainColor? }.
+function RailCard({ title, rows, loading }) {
   return (
     <div
       data-rail={title}
-      className="min-w-0 bg-[#F1E6CE] border border-[#8A6A3A]"
+      className="flex-1 min-w-0 bg-[#F1E6CE] border border-[#8A6A3A]"
       style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.45)" }}
     >
-      <div className="px-[18px] py-[14px] border-b-2 border-[#2A1B0C] text-[13px] tracking-[0.3em] font-bold text-[#2A1B0C]">
+      <div className="px-[16px] py-[10px] border-b-2 border-[#2A1B0C] text-[12px] tracking-[0.28em] font-bold text-[#2A1B0C]">
         {title}
       </div>
       <div>
+        {loading && rows.length === 0 && (
+          <div className="px-[16px] py-4 text-[13px] text-[#7A5A2E]">Loading…</div>
+        )}
         {rows.map((r, i) => {
           const Row = r.slug ? Link : "div";
           const rowProps = r.slug ? { to: `/bottle/${r.slug}` } : {};
@@ -347,28 +234,26 @@ function RailCard({ title, rows }) {
             <Row
               key={i}
               {...rowProps}
-              className="flex items-center gap-[10px] px-[18px] py-[9px] text-[14px] text-left border-b border-[rgba(42,27,12,0.15)] no-underline hover:bg-[rgba(232,180,90,0.18)] focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
+              className="flex items-center gap-[8px] px-[16px] py-[5px] text-[13px] text-left border-b border-[rgba(42,27,12,0.12)] no-underline hover:bg-[rgba(232,180,90,0.18)] focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
               style={i % 2 === 0 ? { background: "rgba(42,27,12,0.03)" } : undefined}
             >
-              <span className="w-[22px] shrink-0 font-bold text-[#A6521B]">{i + 1}</span>
+              <span className="w-[18px] shrink-0 font-bold text-[#A6521B]">{i + 1}</span>
               <span className="flex-1 min-w-0 font-semibold text-[#2A1B0C] truncate">
                 {r.name}
                 {r.distillery && (
-                  <span className="font-normal text-[11px] text-[#7A5A2E] ml-1.5">
+                  <span className="font-normal text-[10px] text-[#7A5A2E] ml-1.5">
                     {r.distillery}
                   </span>
                 )}
-              </span>
-              <span className="shrink-0 text-right leading-tight">
-                <span
-                  className="block font-bold tabular-nums"
-                  style={{ color: r.mainColor ?? "#2A1B0C" }}
-                >
-                  {r.main}
-                </span>
-                {r.sub && (
-                  <span className="block text-[11px] text-[#7A5A2E] tabular-nums">{r.sub}</span>
+                {r.meta && (
+                  <span className="font-normal text-[10px] text-[#7A5A2E] ml-1.5">· {r.meta}</span>
                 )}
+              </span>
+              <span
+                className="shrink-0 font-bold tabular-nums"
+                style={{ color: r.mainColor ?? "#2A1B0C" }}
+              >
+                {r.main}
               </span>
             </Row>
           );
