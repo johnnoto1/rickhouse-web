@@ -107,48 +107,77 @@ export default function RankRound({ authedFetch, initialDeal, imageUrlById, onCo
         {(deal?.bottles ?? []).map((b, idx) => {
           const role = picks[b.id];
           const d = result?.deltas?.[b.id];
+          const imgUrl = imageUrlById?.get(b.id) ?? null;
+          const ratingContent = (
+            <>
+              <span style={S.ratingNum}>{eloToDisplayRating(d ? d.new_rating : b.rating)}</span>
+              <span style={S.ratingCap}>RATING</span>
+              {d && (() => {
+                const dd =
+                  eloToDisplayRating(d.new_rating) - eloToDisplayRating(d.new_rating - d.change);
+                return (
+                  <span className="delta" style={{ color: dd >= 0 ? "#3E7C4F" : "#A03325" }}>
+                    {dd >= 0 ? "+" : ""}
+                    {dd}
+                  </span>
+                );
+              })()}
+            </>
+          );
+          const roleButtons = (
+            <div style={S.btnRow}>
+              {ROLES.map((r) => (
+                <button
+                  key={r.key}
+                  className={"roleBtn roleBtn-" + r.key + (role === r.key ? " roleOn" : "")}
+                  disabled={!!result || busy}
+                  onClick={() => assign(b.id, r.key)}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
+          );
           return (
             <div key={idx} className={"label" + (role ? " label-" + role : "")}>
-              <div className="swapIn" style={S.cardInner}>
-                <BottleImage
-                  bottle={{ name: b.name, image_url: imageUrlById?.get(b.id) ?? null }}
-                  rating={b.rating}
-                  className="w-9 h-9 rounded-md mx-auto mb-1.5 block text-sm"
-                />
-                <div style={S.dist}>{b.distillery}</div>
-                {/* Name + proof on one line; proof omitted entirely when null
-                    (no "PROOF N/A"). */}
-                <div style={S.name}>
-                  {b.name}
-                  {b.proof != null && <span style={S.proofInline}> · {b.proof} PROOF</span>}
+              {imgUrl ? (
+                // Photo card: large bottle anchored left, text right (never
+                // under the bottle), buttons full-width below — same treatment
+                // as the Game ranker's photo cards.
+                <div className="swapIn" style={S.photoInner}>
+                  <div style={S.photoTop}>
+                    <BottleImage
+                      bottle={{ name: b.name, image_url: imgUrl }}
+                      rating={b.rating}
+                      imageClassName="w-20 h-56 sm:w-24 sm:h-64 rounded-md block shrink-0"
+                    />
+                    <div style={S.photoText}>
+                      <div style={S.distL}>{b.distillery}</div>
+                      <div style={S.nameL}>{b.name}</div>
+                      {b.proof != null && <div style={S.metaL}>{b.proof} PROOF</div>}
+                      <div style={S.ratingRowL}>{ratingContent}</div>
+                    </div>
+                  </div>
+                  {roleButtons}
                 </div>
-                <div style={S.ratingRow}>
-                  <span style={S.ratingNum}>{eloToDisplayRating(d ? d.new_rating : b.rating)}</span>
-                  <span style={S.ratingCap}>RATING</span>
-                  {d && (() => {
-                    const dd =
-                      eloToDisplayRating(d.new_rating) - eloToDisplayRating(d.new_rating - d.change);
-                    return (
-                      <span className="delta" style={{ color: dd >= 0 ? "#3E7C4F" : "#A03325" }}>
-                        {dd >= 0 ? "+" : ""}
-                        {dd}
-                      </span>
-                    );
-                  })()}
+              ) : (
+                // Placeholder card: compact centered monogram (proof inline,
+                // omitted when null) — unchanged.
+                <div className="swapIn" style={S.cardInner}>
+                  <BottleImage
+                    bottle={{ name: b.name, image_url: null }}
+                    rating={b.rating}
+                    className="w-9 h-9 rounded-md mx-auto mb-1.5 block text-sm"
+                  />
+                  <div style={S.dist}>{b.distillery}</div>
+                  <div style={S.name}>
+                    {b.name}
+                    {b.proof != null && <span style={S.proofInline}> · {b.proof} PROOF</span>}
+                  </div>
+                  <div style={S.ratingRow}>{ratingContent}</div>
+                  {roleButtons}
                 </div>
-                <div style={S.btnRow}>
-                  {ROLES.map((r) => (
-                    <button
-                      key={r.key}
-                      className={"roleBtn roleBtn-" + r.key + (role === r.key ? " roleOn" : "")}
-                      disabled={!!result || busy}
-                      onClick={() => assign(b.id, r.key)}
-                    >
-                      {r.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              )}
             </div>
           );
         })}
@@ -171,6 +200,19 @@ export default function RankRound({ authedFetch, initialDeal, imageUrlById, onCo
 
 const S = {
   cards: { display: "flex", flexDirection: "column", gap: 8 },
+  // Photo card: large bottle left, text right, buttons full-width below —
+  // mirrors the Game ranker's photo cards (kept in sync until Game is folded
+  // onto RankRound; see note above).
+  photoInner: {
+    border: "1px solid #8A6A3A", margin: 5, padding: "10px 12px 12px",
+    display: "flex", flexDirection: "column",
+  },
+  photoTop: { display: "flex", gap: 12, marginBottom: 10 },
+  photoText: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", textAlign: "left" },
+  distL: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E", textTransform: "uppercase" },
+  nameL: { fontSize: 17, fontWeight: 700, color: "#2A1B0C", margin: "4px 0 2px", lineHeight: 1.2 },
+  metaL: { fontSize: 11, letterSpacing: "0.25em", color: "#7A5A2E" },
+  ratingRowL: { margin: "8px 0 0", display: "flex", alignItems: "baseline", gap: 8 },
   // Compact so three cards sit close to one mobile screen: small monogram,
   // tight padding, name+proof on one line. Role buttons stay full-size.
   cardInner: {
