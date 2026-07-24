@@ -12,21 +12,29 @@ import { eloToDisplayRating } from "./ratingDisplay.js";
 // opts in to its larger sizing, the batch-aware proof line, the swap button,
 // and the larger placeholder monogram.
 //
-// Structural differences preserved byte-for-byte:
-//   - placeholder proof: gate shows it INLINE in the name (" · 90 PROOF"),
-//     ranker shows it as a SEPARATE meta line (and never omits it — it has a
-//     "PROOF N/A" fallback);
+// Between name and rating the card shows THREE stacked spec lines — type,
+// proof, age — sourced from the deal/swap payload (type_label, proof /
+// proof_display, age_band / age_years). Styled to the card's existing meta
+// treatment; sized by the two knobs below. Both layouts (photo left-aligned,
+// placeholder centered) use the same spec block; alignment is inherited.
+//
+// Variant differences that remain:
 //   - swap button: ranker only (needs a positioned wrapper — .swapX is
-//     position:absolute — which is why the wrapper always sets position:relative,
-//     a no-op with no absolute children on the gate);
+//     position:absolute — which is why the wrapper sets position:relative only
+//     when onSwap is present; a no-op on the gate);
 //   - inner .swapIn div key: ranker keys it by bottle id so a swapped-in
 //     replacement remounts and replays the swap-in animation; the gate never
-//     swaps, so it stays position-keyed (no replay), exactly as before.
+//     swaps, so it stays position-keyed (no replay).
 const ROLES = [
   { key: "keep", label: "KEEP" },
   { key: "trade", label: "TRADE" },
   { key: "cut", label: "CUT" },
 ];
+
+// The two size knobs for the spec lines (font px per surface) — cheap to nudge
+// after seeing prod. Spacing / letter-spacing / color follow the meta treatment.
+const SPEC_FONT_GATE = 10;
+const SPEC_FONT_RANKER = 12;
 
 // Props:
 //   bottle        — the dealt bottle: { id, name, distillery, proof, parent_name, rating }
@@ -58,19 +66,38 @@ export default function RankCard({
   const s = variant === "ranker" ? RANKER : GATE;
   const b = bottle;
 
-  // Gate: "{proof} PROOF", or null → the proof line is omitted entirely.
-  // Ranker: batch-aware and never null (PROOF N/A fallback), matching Game's
-  // former inline proofText exactly.
-  const proofText =
-    variant === "ranker"
-      ? batchMode && b.parent_name
-        ? `PART OF ${b.parent_name.toUpperCase()}`
-        : b.proof
-        ? `${b.proof} PROOF`
-        : "PROOF N/A"
+  // The three spec lines. TYPE: stored label else the enum, uppercased. PROOF:
+  // batch mode shows "PART OF <line>" (preserved); else the real proof, else the
+  // varies short form (proof_display), else a safe fallback. AGE: NAS when the
+  // band says so, else the age floored to whole years (defensive — a stray
+  // decimal can never render as "13.6 YEARS"), else VARIES.
+  const typeLine = b.type_label ?? (b.type ?? "").toUpperCase();
+  const proofLine =
+    batchMode && b.parent_name
+      ? `PART OF ${b.parent_name.toUpperCase()}`
       : b.proof != null
       ? `${b.proof} PROOF`
-      : null;
+      : b.proof_display || "PROOF N/A";
+  const ageLine =
+    b.age_band === "nas"
+      ? "NAS"
+      : b.age_years != null
+      ? `${Math.floor(Number(b.age_years))} YEARS`
+      : "VARIES";
+  const specStyle = {
+    fontSize: variant === "ranker" ? SPEC_FONT_RANKER : SPEC_FONT_GATE,
+    letterSpacing: "0.22em",
+    lineHeight: 1.5,
+    color: "#7A5A2E",
+    textTransform: "uppercase",
+  };
+  const specLines = (
+    <div style={s.specWrap}>
+      <div style={specStyle}>{typeLine}</div>
+      <div style={specStyle}>{proofLine}</div>
+      <div style={specStyle}>{ageLine}</div>
+    </div>
+  );
 
   // d.change is the raw ELO delta; re-derive the pre-round ELO from it so the
   // shown delta is the SAME display transform applied to both ends.
@@ -143,14 +170,15 @@ export default function RankCard({
             <div style={s.photoText}>
               <div style={s.distL}>{b.distillery}</div>
               <div style={s.nameL}>{b.name}</div>
-              {proofText && <div style={s.metaL}>{proofText}</div>}
+              {specLines}
               <div style={s.ratingRowL}>{ratingContent}</div>
             </div>
           </div>
           {roleButtons}
         </div>
       ) : (
-        // Placeholder card: centered monogram, centered text, buttons below.
+        // Placeholder card: centered monogram, centered text (spec lines
+        // centered via the container), buttons below.
         <div key={innerKey} className="swapIn" style={s.cardInner}>
           <BottleImage
             bottle={{ name: b.name, image_url: null }}
@@ -158,17 +186,8 @@ export default function RankCard({
             className={s.monogram}
           />
           <div style={s.dist}>{b.distillery}</div>
-          {variant === "ranker" ? (
-            <>
-              <div style={s.name}>{b.name}</div>
-              <div style={s.meta}>{proofText}</div>
-            </>
-          ) : (
-            <div style={s.name}>
-              {b.name}
-              {proofText && <span style={s.proofInline}> · {proofText}</span>}
-            </div>
-          )}
+          <div style={s.name}>{b.name}</div>
+          {specLines}
           <div style={s.ratingRow}>{ratingContent}</div>
           {roleButtons}
         </div>
@@ -187,7 +206,6 @@ const GATE = {
   photoText: { flex: 1, minWidth: 0, display: "flex", flexDirection: "column", textAlign: "left" },
   distL: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E", textTransform: "uppercase" },
   nameL: { fontSize: 17, fontWeight: 700, color: "#2A1B0C", margin: "4px 0 2px", lineHeight: 1.2 },
-  metaL: { fontSize: 11, letterSpacing: "0.25em", color: "#7A5A2E" },
   ratingRowL: { margin: "8px 0 0", display: "flex", alignItems: "baseline", gap: 8 },
   cardInner: {
     border: "1px solid #8A6A3A", margin: 5, padding: "8px 12px 10px",
@@ -195,7 +213,7 @@ const GATE = {
   },
   dist: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E", textTransform: "uppercase" },
   name: { fontSize: 17, fontWeight: 700, color: "#2A1B0C", margin: "3px 0 0", lineHeight: 1.2 },
-  proofInline: { fontSize: 11, fontWeight: 400, letterSpacing: "0.08em", color: "#7A5A2E" },
+  specWrap: { margin: "4px 0 0", display: "flex", flexDirection: "column", gap: 2 },
   ratingRow: { margin: "5px 0 7px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
   ratingNum: { fontSize: 22, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 8, letterSpacing: "0.3em", color: "#7A5A2E" },
@@ -218,7 +236,6 @@ const RANKER = {
   },
   distL: { fontSize: 10, letterSpacing: "0.3em", color: "#7A5A2E", textTransform: "uppercase" },
   nameL: { fontSize: 19, fontWeight: 700, color: "#2A1B0C", margin: "4px 0 2px", lineHeight: 1.2 },
-  metaL: { fontSize: 11, letterSpacing: "0.25em", color: "#7A5A2E" },
   ratingRowL: { margin: "8px 0 0", display: "flex", alignItems: "baseline", gap: 8 },
   cardInner: {
     border: "1px solid #8A6A3A", margin: 6, padding: "18px 14px 16px",
@@ -230,7 +247,7 @@ const RANKER = {
     fontSize: 22, fontWeight: 700, color: "#2A1B0C", margin: "10px 0 4px",
     lineHeight: 1.15, minHeight: 52, display: "flex", alignItems: "center", justifyContent: "center",
   },
-  meta: { fontSize: 11, letterSpacing: "0.3em", color: "#7A5A2E", minHeight: 26, lineHeight: 1.4 },
+  specWrap: { margin: "6px 0 0", display: "flex", flexDirection: "column", gap: 3 },
   ratingRow: { margin: "14px 0 12px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
   ratingNum: { fontSize: 30, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E" },
