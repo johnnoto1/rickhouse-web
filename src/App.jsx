@@ -418,6 +418,12 @@ function Leaderboard({ session }) {
   // /collection lands directly on the Map (no extra tap).
   const [searchParams] = useSearchParams();
   const [mode, setMode] = useState(() => (searchParams.get("view") === "map" ? "map" : "table"));
+  // Search + price-band filter, shared across both projections. Search narrows
+  // the TABLE only (the map has no text to narrow — it ignores it); the band
+  // applies to BOTH. Plain component state — no URL params, since neither is
+  // an entry point worth deep-linking the way ?view=map is.
+  const [search, setSearch] = useState("");
+  const [priceBand, setPriceBand] = useState("all");
   // childParentId maps a rankable CHILD's bottle_id → its parent's, so a
   // collection that contains a specific batch highlights the parent point on
   // the parents-only map (the board never shows the child as its own row).
@@ -449,6 +455,12 @@ function Leaderboard({ session }) {
       // its batches," tracked here as the newest one, not the parent's
       // own (usually null) release_year.
       const childMostRecentYear = new Map();
+      // Child names folded up to the parent so searching a batch (e.g. "c923")
+      // surfaces its parent row, even though the child never renders as its own
+      // board line. Cheap: this loop already visits every child, so it's one
+      // extra push per child, and the names are baked into each parent's
+      // precomputed lowercase `searchText` below (no per-keystroke allocation).
+      const childNames = new Map();
       for (const r of catalog) {
         if (r.bottles?.parent_id) {
           const pid = r.bottles.parent_id;
@@ -457,6 +469,12 @@ function Leaderboard({ session }) {
           if (y != null) {
             const prev = childMostRecentYear.get(pid);
             if (prev == null || y > prev) childMostRecentYear.set(pid, y);
+          }
+          const nm = r.bottles.name;
+          if (nm) {
+            const list = childNames.get(pid);
+            if (list) list.push(nm);
+            else childNames.set(pid, [nm]);
           }
         }
       }
@@ -470,6 +488,16 @@ function Leaderboard({ session }) {
           ratingRank: i + 1,
           childCount: childCounts.get(r.bottle_id) ?? 0,
           mostRecentChildYear: childMostRecentYear.get(r.bottle_id) ?? null,
+          // Precomputed search haystack: own name + distillery + every folded
+          // child name, lowercased once so the table's substring filter is a
+          // single cheap includes() per row per keystroke.
+          searchText: [
+            r.bottles?.name ?? "",
+            r.bottles?.distillery ?? "",
+            ...(childNames.get(r.bottle_id) ?? []),
+          ]
+            .join(" ")
+            .toLowerCase(),
         }));
       setRows(parentsOnly);
     });
@@ -524,6 +552,42 @@ function Leaderboard({ session }) {
     </div>
   );
 
+  // The price-band select — rendered on both projections (it filters both).
+  const bandSelect = (
+    <select
+      className="bandSelect"
+      value={priceBand}
+      onChange={(e) => setPriceBand(e.target.value)}
+      aria-label="Filter by price band"
+    >
+      {PRICE_BANDS.map((b) => (
+        <option key={b.key} value={b.key}>
+          {b.label}
+        </option>
+      ))}
+    </select>
+  );
+  // Controls row lives under the panel head (not inside it — the head is a
+  // no-wrap title+toggle row with no space to spare at 390). Table gets search
+  // + band; the map gets the band alone, since search would be a dead control
+  // there (the map ignores search text by spec).
+  const tableControls = rows?.length ? (
+    <div style={S.leaderControlsRow}>
+      <input
+        className="leaderSearch"
+        type="search"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search bottles…"
+        aria-label="Search bottles"
+      />
+      {bandSelect}
+    </div>
+  ) : null;
+  const mapControls = rows?.length ? (
+    <div style={S.leaderControlsRow}>{bandSelect}</div>
+  ) : null;
+
   // One vote gate wraps BOTH modes, so first-visit gating and the session
   // unlock are shared across Table, Map, and the ?view=map entry (all of them
   // are this single Leaderboard mount). Toggling Table↔Map swaps the children
@@ -531,9 +595,24 @@ function Leaderboard({ session }) {
   return (
     <VoteGate session={session} imageUrlById={imageUrlById}>
       {mode === "table" ? (
-        <Board title="BARREL RANKINGS" rows={rows} sortable headerRight={toggle} />
+        <Board
+          title="BARREL RANKINGS"
+          rows={rows}
+          sortable
+          headerRight={toggle}
+          controls={tableControls}
+          search={search}
+          priceBand={priceBand}
+        />
       ) : (
-        <ValueMap title="BARREL RANKINGS" rows={rows} ownedParentIds={ownedParentIds} headerRight={toggle} />
+        <ValueMap
+          title="BARREL RANKINGS"
+          rows={rows}
+          ownedParentIds={ownedParentIds}
+          headerRight={toggle}
+          controls={mapControls}
+          priceBand={priceBand}
+        />
       )}
     </VoteGate>
   );
@@ -687,7 +766,20 @@ const MAP_MARGIN = { top: 24, right: 16, bottom: 34, left: 44 };
 const PRICE_TICKS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 const fmtPriceTick = (n) => (n >= 1000 ? "$" + n / 1000 + "k" : "$" + n);
 
-function ValueMap({ title, rows, ownedParentIds, headerRight }) {
+// One price-band truth, consumed identically by the Table filter and the Map's
+// rendered-point set. Basis is row.price — the resolved secondary → LINE PRICE
+// → MSRP chain from leaderboardCatalog, the same value the map X-axis and Best
+// Value already use. A null price has no shelf, so a banded selection excludes
+// it (it only appears under ALL).
+const PRICE_BANDS = [
+  { key: "all", label: "ALL", inBand: () => true },
+  { key: "top", label: "TOP SHELF · $100+", inBand: (p) => p != null && p >= 100 },
+  { key: "mid", label: "MID SHELF · $40–99", inBand: (p) => p != null && p >= 40 && p < 100 },
+  { key: "bottom", label: "BOTTOM SHELF · UNDER $40", inBand: (p) => p != null && p < 40 },
+];
+const bandTest = (key) => (PRICE_BANDS.find((b) => b.key === key) ?? PRICE_BANDS[0]).inBand;
+
+function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBand = "all" }) {
   const [w, setW] = useState(0);
   const [active, setActive] = useState(null); // bottle_id of the tapped point
   // Field toggle: fade the full-catalog backdrop out, leaving only the user's
@@ -722,6 +814,15 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
   const points = useMemo(
     () => (rows ?? []).filter((r) => r.price != null && r.price > 0),
     [rows]
+  );
+  // The price band filters what's DRAWN, never the domain: `geom` below stays
+  // computed from the full `points`, so the axes hold their full-field extent
+  // and no point ever moves when a band is chosen (the standing axis rule, same
+  // as the Full-catalog toggle). Points outside the band simply disappear.
+  const inBand = bandTest(priceBand);
+  const renderPoints = useMemo(
+    () => (priceBand === "all" ? points : points.filter((p) => inBand(p.price))),
+    [points, priceBand, inBand]
   );
 
   const geom = useMemo(() => {
@@ -761,15 +862,28 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
     return { h, plotL, plotT, plotW, plotH, x, y, yMax, yTicks, xTicks };
   }, [w, points]);
 
-  const activePoint = active != null ? points.find((p) => p.bottle_id === active) : null;
+  // Active point resolves against the rendered (band-filtered) set, so tapping
+  // a point and then choosing a band it falls outside of clears the tooltip
+  // rather than leaving it floating over a hidden dot.
+  const activePoint = active != null ? renderPoints.find((p) => p.bottle_id === active) : null;
+  // Owned availability (does the Full-catalog toggle appear?) keys off the full
+  // owned set so the toggle doesn't flicker in/out as bands change; what's
+  // DRAWN and hit-tested keys off the banded set.
   const ownedOnBoard = useMemo(
     () => points.filter((p) => ownedParentIds.has(p.bottle_id)),
     [points, ownedParentIds]
+  );
+  const ownedRender = useMemo(
+    () => renderPoints.filter((p) => ownedParentIds.has(p.bottle_id)),
+    [renderPoints, ownedParentIds]
   );
   const hasOwnedPoints = ownedOnBoard.length > 0;
   // With no owned points, "hide field" would leave a blank chart — force the
   // field on so the toggle can never strand the user on an empty frame.
   const fieldShown = showField || !hasOwnedPoints;
+  // A band the user's field has nothing in — axes stay, but there's nothing to
+  // plot; say so rather than showing a blank frame with no explanation.
+  const bandEmpty = points.length > 0 && renderPoints.length === 0;
 
   return (
     <main style={S.main}>
@@ -778,6 +892,8 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
           <span>{title}</span>
           {headerRight}
         </div>
+
+        {controls}
 
         {rows === null && <p style={{ padding: 18 }}>Loading…</p>}
         {rows?.length === 0 && (
@@ -922,7 +1038,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                     className="mapFieldLayer"
                     style={{ opacity: fieldShown ? 1 : 0, pointerEvents: fieldShown ? "auto" : "none" }}
                   >
-                    {points
+                    {renderPoints
                       .filter((p) => !ownedParentIds.has(p.bottle_id))
                       .map((p) => {
                         const cx = geom.x(p.price);
@@ -953,9 +1069,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                   {/* Your bottles — gold, larger, ringed; still solid/hollow
                       by price provenance so an MSRP-priced trophy isn't sold
                       as a value even when it's yours. */}
-                  {points
-                    .filter((p) => ownedParentIds.has(p.bottle_id))
-                    .map((p) => {
+                  {ownedRender.map((p) => {
                       const cx = geom.x(p.price);
                       const cy = geom.y(eloToDisplayRating(p.rating));
                       return p.priceIsFallback ? (
@@ -984,7 +1098,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                       point is tappable on a phone; owned last so they win the
                       overlap. When the field is hidden, only owned points stay
                       interactive (the faded backdrop shouldn't answer taps). */}
-                  {(fieldShown ? points : ownedOnBoard).map((p) => (
+                  {(fieldShown ? renderPoints : ownedRender).map((p) => (
                     <circle
                       key={"hit" + p.bottle_id}
                       cx={geom.x(p.price)}
@@ -1010,6 +1124,10 @@ function ValueMap({ title, rows, ownedParentIds, headerRight }) {
                 />
               )}
             </div>
+
+            {bandEmpty && (
+              <p style={S.mapNote}>No bottles on this shelf.</p>
+            )}
 
             {/* Legend — provenance (solid/hollow) shown once, applies to both
                 the oak backdrop and the gold "yours." */}
@@ -1094,7 +1212,7 @@ const RECENT_RELEASE_MIN_YEAR = CURRENT_YEAR - 1;
 
 // Per-bottle effective price: secondary market when available, else MSRP
 // (matches the fallback rule in TradeCalculator's effectivePrice).
-function Board({ title, rows, empty, sortable = false, headerRight }) {
+function Board({ title, rows, empty, sortable = false, headerRight, controls, search = "", priceBand = "all" }) {
   const [sortKey, setSortKey] = useState("rating");
   const [sortDir, setSortDir] = useState("desc");
   // Filters only ever apply to the sortable (Leaderboard) board — MyBoard
@@ -1122,6 +1240,8 @@ function Board({ title, rows, empty, sortable = false, headerRight }) {
   // pulls every active bottle up front), so filtering here is just an array
   // filter, no re-fetch. Type defaults to 'bourbon' for the rare row missing
   // one rather than silently disappearing when its own filter chip is on.
+  const q = search.trim().toLowerCase();
+  const inBand = bandTest(priceBand);
   const filteredRows = useMemo(() => {
     if (!rows || !sortable) return rows;
     return rows.filter((r) => {
@@ -1134,9 +1254,16 @@ function Board({ title, rows, empty, sortable = false, headerRight }) {
         const childYear = r.mostRecentChildYear ?? 0;
         if (Math.max(ownYear, childYear) < RECENT_RELEASE_MIN_YEAR) return false;
       }
+      // Price band on the resolved price chain — the same value the map bands
+      // on, so a shelf reads identically in both projections.
+      if (priceBand !== "all" && !inBand(r.price)) return false;
+      // Case-insensitive substring over the precomputed haystack (name +
+      // distillery + folded child names), so searching a batch surfaces its
+      // parent line.
+      if (q && !(r.searchText ?? "").includes(q)) return false;
       return true;
     });
-  }, [rows, sortable, typeFilters, recentOnly]);
+  }, [rows, sortable, typeFilters, recentOnly, priceBand, q, inBand]);
 
   // rows (for a sortable board) already carry price/priceIsFallback/value/
   // ratingRank — fetchLeaderboardCatalog computes all of that once at fetch
@@ -1170,7 +1297,8 @@ function Board({ title, rows, empty, sortable = false, headerRight }) {
 
   const finalRows = sortable ? displayRows : rows;
   const anyGraduated = finalRows?.some((r) => (r.rounds_played ?? 0) >= 10) ?? false;
-  const filterActive = sortable && (TYPE_KEYS.some((k) => !typeFilters[k]) || recentOnly);
+  const filterActive =
+    sortable && (TYPE_KEYS.some((k) => !typeFilters[k]) || recentOnly || priceBand !== "all" || !!q);
   const hasAnyRows = (rows?.length ?? 0) > 0;
 
   // KTC-style dynamic tiers: sort by rating desc, then walk the list in
@@ -1270,6 +1398,8 @@ function Board({ title, rows, empty, sortable = false, headerRight }) {
           {headerRight}
         </div>
 
+        {controls}
+
         {sortable && hasAnyRows && (
           <div style={S.leaderFilterRow}>
             {TYPE_KEYS.map((key) => {
@@ -1308,7 +1438,11 @@ function Board({ title, rows, empty, sortable = false, headerRight }) {
         {finalRows?.length === 0 && (
           <p style={{ padding: 18, fontSize: 14 }}>
             {filterActive
-              ? recentOnly
+              ? q
+                ? `No bottles match “${search.trim()}”.`
+                : priceBand !== "all"
+                ? "No bottles on this shelf."
+                : recentOnly
                 ? `No bottles released in ${RECENT_RELEASE_MIN_YEAR} or later yet.`
                 : "No bottles match this filter."
               : empty ?? "No rated bottles yet."}
@@ -1648,6 +1782,13 @@ const S = {
     display: "flex", alignItems: "center", justifyContent: "center",
     gap: 6, flexWrap: "wrap", padding: "8px 18px", borderBottom: "1px solid rgba(42,27,12,0.15)",
   },
+  // Search + band, in their own row under the head (the head is a no-wrap
+  // title+toggle row with no room at 390). Wraps to two lines only when the two
+  // controls genuinely can't share one — search flexes, band holds its width.
+  leaderControlsRow: {
+    display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+    padding: "10px 18px", borderBottom: "1px solid rgba(42,27,12,0.15)",
+  },
   leaderFilterCount: {
     fontSize: 11, color: "#7A5A2E", fontStyle: "italic", marginLeft: 4,
   },
@@ -1705,6 +1846,15 @@ const CSS = `
 .segBtn:last-child { border-radius: 0 999px 999px 0; }
 .segBtn:hover:not(.segOn) { color: #2A1B0C; border-color: #2A1B0C; }
 .segOn { background: #2A1B0C; color: #E8B45A; border-color: #2A1B0C; }
+/* Leaderboard search + price-band, sharing the parchment/oak treatment. The
+   search input flexes to fill; the band select holds its natural width. Native
+   controls are reset to the panel's serif so they don't fall back to a system
+   sans that reads as a form field bolted on. */
+.leaderSearch { flex: 1 1 140px; min-width: 0; background: #FBF4E2; border: 1px solid #8A6A3A; color: #2A1B0C; padding: 7px 14px; font-family: Georgia, serif; font-size: 13px; border-radius: 999px; box-sizing: border-box; -webkit-appearance: none; appearance: none; }
+.leaderSearch::placeholder { color: #A6874E; font-style: italic; }
+.leaderSearch:focus-visible { outline: 2px solid #E8B45A; outline-offset: 1px; }
+.bandSelect { flex: 0 0 auto; max-width: 100%; background-color: #FBF4E2; border: 1px solid #8A6A3A; color: #2A1B0C; padding: 7px 30px 7px 14px; font-family: Georgia, serif; font-size: 11px; letter-spacing: 0.1em; font-weight: 700; cursor: pointer; border-radius: 999px; box-sizing: border-box; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%237A5A2E' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>"); background-repeat: no-repeat; background-position: right 12px center; }
+.bandSelect:focus-visible { outline: 2px solid #E8B45A; outline-offset: 1px; }
 /* Field toggle: the backdrop layer fades; the frame/axes stay put. */
 .mapFieldLayer { transition: opacity .3s ease; }
 @media (prefers-reduced-motion: reduce) { .mapFieldLayer { transition: none; } }
