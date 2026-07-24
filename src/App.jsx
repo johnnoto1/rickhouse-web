@@ -1667,6 +1667,18 @@ const S = {
   footer: { textAlign: "center", padding: "18px 10px 24px", fontSize: 10, letterSpacing: "0.35em", color: "#7A5A2E" },
 };
 
+// Medal-metal role palette (knobs) — replaces the old green/amber/red role
+// motif. Tuned to sit on the parchment (#F1E6CE) / brown card and stay legible
+// as a SELECTED state, both as the button fill (.roleBtn-*.roleOn) and the
+// selected-card ring (.label-*). Silver is deliberately a deepened pewter — a
+// bright silver washes out to near-invisible on cream. These are the only role
+// colors; the rating delta +green/−red is movement, not a role, and is left
+// alone (styled inline in RankCard). Text color per metal is chosen for
+// contrast against that fill.
+const MEDAL_GOLD = "#C6912E";   // keep / 1st
+const MEDAL_SILVER = "#83888F"; // trade / 2nd — pewter depth so it reads on cream
+const MEDAL_BRONZE = "#9C5A2C"; // cut / 3rd
+
 const CSS = `
 .tab { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 8px 20px; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.25em; cursor: pointer; transition: all .15s; text-decoration: none; display: inline-block; }
 .tab:hover { border-color: #B08040; color: #E8B45A; }
@@ -1735,15 +1747,15 @@ const CSS = `
 }
 .label { background: #F1E6CE; box-shadow: 0 10px 30px rgba(0,0,0,0.45); transition: transform .18s, box-shadow .18s; }
 .label:hover { transform: translateY(-3px); }
-.label-keep  { box-shadow: 0 0 0 3px #3E7C4F, 0 10px 30px rgba(0,0,0,0.45); }
-.label-trade { box-shadow: 0 0 0 3px #B08040, 0 10px 30px rgba(0,0,0,0.45); }
-.label-cut   { box-shadow: 0 0 0 3px #A03325, 0 10px 30px rgba(0,0,0,0.45); opacity: .92; }
+.label-keep  { box-shadow: 0 0 0 3px ${MEDAL_GOLD}, 0 10px 30px rgba(0,0,0,0.45); }
+.label-trade { box-shadow: 0 0 0 3px ${MEDAL_SILVER}, 0 10px 30px rgba(0,0,0,0.45); }
+.label-cut   { box-shadow: 0 0 0 3px ${MEDAL_BRONZE}, 0 10px 30px rgba(0,0,0,0.45); opacity: .92; }
 .roleBtn { flex: 1; padding: 9px 0; font-family: Georgia, serif; font-size: 11px; letter-spacing: 0.2em; font-weight: 700; cursor: pointer; background: transparent; border: 1px solid #8A6A3A; color: #7A5A2E; transition: all .12s; }
 .roleBtn:hover:not(:disabled) { border-color: #2A1B0C; color: #2A1B0C; }
 .roleBtn:disabled { cursor: default; opacity: .6; }
-.roleBtn-keep.roleOn  { background: #3E7C4F; border-color: #3E7C4F; color: #F1E6CE; opacity: 1; }
-.roleBtn-trade.roleOn { background: #B08040; border-color: #B08040; color: #2A1B0C; opacity: 1; }
-.roleBtn-cut.roleOn   { background: #A03325; border-color: #A03325; color: #F1E6CE; opacity: 1; }
+.roleBtn-keep.roleOn  { background: ${MEDAL_GOLD}; border-color: ${MEDAL_GOLD}; color: #2A1B0C; opacity: 1; }
+.roleBtn-trade.roleOn { background: ${MEDAL_SILVER}; border-color: ${MEDAL_SILVER}; color: #2A1B0C; opacity: 1; }
+.roleBtn-cut.roleOn   { background: ${MEDAL_BRONZE}; border-color: ${MEDAL_BRONZE}; color: #F1E6CE; opacity: 1; }
 .pourBtn { background: #E8B45A; color: #2A1B0C; border: none; padding: 12px 34px; font-family: Georgia, serif; font-size: 13px; letter-spacing: 0.3em; font-weight: 700; cursor: pointer; transition: transform .12s; }
 .pourBtn:hover { transform: translateY(-2px); }
 .row { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 18px; border-bottom: 1px solid rgba(42,27,12,0.15); font-size: 13px; text-align: left; box-sizing: border-box; transition: transform .12s, box-shadow .12s, background .12s; }

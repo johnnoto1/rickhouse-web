@@ -39,9 +39,12 @@ const ROLES = [
 // vote semantics untouched.
 const ROLE_MEDALS = { keep: "🥇", trade: "🥈", cut: "🥉" };
 const ROLE_LABELS = { keep: "1st", trade: "2nd", cut: "3rd" };
-// Medal glyph size as a multiple of the button font-size — the size knob (like
-// SPEC_FONT_*). Buttons grow taller uniformly at higher values.
-const MEDAL_SCALE = 2;
+// Button label sizing knobs — multiples of the button's own font-size. Medal
+// glyph sits on top; the ordinal reads as a small caption beneath it (stacked
+// layout enforced in the button below). Ordinal is deliberately small so the
+// buttons eat less card height.
+const MEDAL_SCALE = 4;
+const ORDINAL_SCALE = 1.2;
 
 // The two size knobs for the spec lines (font px per surface) — cheap to nudge
 // after seeing prod. Spacing / letter-spacing / color follow the meta treatment.
@@ -140,11 +143,15 @@ export default function RankCard({
           disabled={resolved || busy}
           onClick={() => onAssign(r.key)}
           aria-label={r.aria}
+          // Always stacked: medal on top, ordinal centered beneath it. A flex
+          // column with centered alignment makes medal-left/text-right wrapping
+          // impossible regardless of button width.
+          style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2px" }}
         >
-          <span aria-hidden="true" style={{ fontSize: `${MEDAL_SCALE}em`, verticalAlign: "middle", marginRight: "0.28em" }}>
+          <span aria-hidden="true" style={{ fontSize: `${MEDAL_SCALE}em`, lineHeight: 1 }}>
             {ROLE_MEDALS[r.key]}
           </span>
-          <span style={{ verticalAlign: "middle" }}>{ROLE_LABELS[r.key]}</span>
+          <span style={{ fontSize: `${ORDINAL_SCALE}em`, lineHeight: 1 }}>{ROLE_LABELS[r.key]}</span>
         </button>
       ))}
     </div>
