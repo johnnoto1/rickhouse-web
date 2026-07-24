@@ -1,5 +1,35 @@
+import { useState, useEffect } from "react";
 import BottleImage from "./BottleImage.jsx";
 import { eloToDisplayRating } from "./ratingDisplay.js";
+
+// The gate modal centers and stops growing at ≥600px (see .gateModal's media
+// query in App.jsx); that's exactly where the photo card's text column gains
+// the room the 390 compact scale leaves empty, so it's the breakpoint the gate
+// text steps up at. Kept in sync with that CSS boundary on purpose.
+const GATE_DESKTOP_BREAKPOINT = 600;
+// The /rank ranker goes comfortably multi-column (~350px cards) at ≥768px;
+// that's where its text steps up and its cards compact. Mobile (<768, the
+// stacked full-width layout) keeps RANKER exactly.
+const RANKER_DESKTOP_BREAKPOINT = 768;
+
+// Reactive min-width match. Client-only SPA (no SSR), but the window guard keeps
+// the first render safe; re-renders on breakpoint cross so the gate swaps its
+// size table live. Ranker never calls into a different table, so this only ever
+// changes the gate.
+function useMinWidth(px) {
+  const [match, setMatch] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia(`(min-width:${px}px)`).matches : false
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(`(min-width:${px}px)`);
+    const on = () => setMatch(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [px]);
+  return match;
+}
 
 // One keep/trade/cut card — the SINGLE renderer for both the /rank ranker
 // (Game, App.jsx) and the leaderboard vote gate (RankRound.jsx). It replaces
@@ -46,10 +76,9 @@ const ROLE_LABELS = { keep: "1st", trade: "2nd", cut: "3rd" };
 const MEDAL_SCALE = 4;
 const ORDINAL_SCALE = 1.2;
 
-// The two size knobs for the spec lines (font px per surface) — cheap to nudge
-// after seeing prod. Spacing / letter-spacing / color follow the meta treatment.
-const SPEC_FONT_GATE = 10;
-const SPEC_FONT_RANKER = 12;
+// The spec-line font is now a per-surface knob IN the style tables (s.specFont),
+// alongside every other size, so the desktop gate can step it up with the rest
+// of its text. Spacing / letter-spacing / color still follow the meta treatment.
 
 // Props:
 //   bottle        — the dealt bottle: { id, name, distillery, proof, parent_name, rating }
@@ -78,7 +107,17 @@ export default function RankCard({
   swapBusy = false,
   swapping = false,
 }) {
-  const s = variant === "ranker" ? RANKER : GATE;
+  // Each surface steps up at its own desktop breakpoint; below it, the compact
+  // base table (GATE / RANKER) is used verbatim so mobile stays measured-equal.
+  const isDesktop = useMinWidth(variant === "ranker" ? RANKER_DESKTOP_BREAKPOINT : GATE_DESKTOP_BREAKPOINT);
+  const s =
+    variant === "ranker"
+      ? isDesktop
+        ? RANKER_DESKTOP
+        : RANKER
+      : isDesktop
+      ? GATE_DESKTOP
+      : GATE;
   const b = bottle;
 
   // The three spec lines. TYPE: stored label else the enum, uppercased. PROOF:
@@ -100,7 +139,7 @@ export default function RankCard({
       ? `${Math.floor(Number(b.age_years))} YEARS`
       : "VARIES";
   const specStyle = {
-    fontSize: variant === "ranker" ? SPEC_FONT_RANKER : SPEC_FONT_GATE,
+    fontSize: s.specFont,
     letterSpacing: "0.22em",
     lineHeight: 1.5,
     color: "#7A5A2E",
@@ -240,9 +279,37 @@ const GATE = {
   ratingRow: { margin: "5px 0 7px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
   ratingNum: { fontSize: 22, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 8, letterSpacing: "0.3em", color: "#7A5A2E" },
+  specFont: 10,
   btnRow: { display: "flex", gap: 6, marginTop: "auto" },
   monogram: "w-9 h-9 rounded-md mx-auto mb-1.5 block text-sm",
   photoImg: "w-20 h-56 sm:w-24 sm:h-64 rounded-md block shrink-0",
+};
+
+// Desktop gate: same compact card + buttons/medals + image, but the TEXT column
+// steps up toward the ranker's scale so it fills the roomy centered modal
+// instead of floating in empty space beside the tall bottle. Only the text-size
+// keys change — layout, padding, image, and button row are inherited from GATE
+// unchanged. All knob-adjustable, like the rest of the table.
+const GATE_DESKTOP = {
+  ...GATE,
+  distL: { ...GATE.distL, fontSize: 10 },
+  nameL: { ...GATE.nameL, fontSize: 20 },
+  ratingRowL: { ...GATE.ratingRowL, margin: "10px 0 0" },
+  dist: { ...GATE.dist, fontSize: 10 },
+  name: { ...GATE.name, fontSize: 20 },
+  ratingNum: { ...GATE.ratingNum, fontSize: 27 },
+  ratingCap: { ...GATE.ratingCap, fontSize: 9 },
+  specFont: 12,
+  // The whole point of the desktop step-up: the photo slot was h-64 (256px),
+  // ~100px taller than the stepped text column, so the card had a huge blank
+  // band between the rating and the buttons. Size the slot to the content
+  // column height (~160px) instead — a tall bottle fills it large-but-contained
+  // (object-contain), a squat one fills the width and lands near the same
+  // height, and the card hugs its content (worst-case rating→button gap ≈ a
+  // 1-line-name card, ~13px ≈ normal padding). Wider than the compact slot
+  // (w-28) so the bottle reads substantial, not squat. Non-responsive on
+  // purpose — GATE_DESKTOP is only ever selected at ≥600px.
+  photoImg: "w-28 h-40 rounded-md block shrink-0",
 };
 
 // Large full-page card (the /rank ranker). Formerly App.jsx's card S keys.
@@ -274,7 +341,50 @@ const RANKER = {
   ratingRow: { margin: "14px 0 12px", display: "flex", alignItems: "baseline", justifyContent: "center", gap: 8 },
   ratingNum: { fontSize: 30, fontWeight: 700, color: "#2A1B0C" },
   ratingCap: { fontSize: 9, letterSpacing: "0.3em", color: "#7A5A2E" },
+  specFont: 12,
   btnRow: { display: "flex", gap: 6, marginTop: "auto" },
   monogram: "w-14 h-14 rounded-md mx-auto mb-3 block text-lg",
   photoImg: "w-20 h-56 sm:w-24 sm:h-64 rounded-md block shrink-0",
+};
+
+// Desktop ranker (≥768px). Two problems on desktop: the dist/spec/rating text
+// was too small for the roomy card, and the cards carried a lot of dead
+// vertical space — the photo card's h-64 (256px) image towered over its short
+// text column (a ~100px gap before the buttons), while the placeholder's sparse
+// stack (big monogram, minHeight-52 name, generous margins) made it the tallest
+// card, which the photo then stretched to match. So this table (a) steps up
+// dist/spec/rating — NAME STAYS — and (b) compacts BOTH layouts so their
+// natural heights land close together and the whole row hugs content: a shorter
+// image slot on the photo card, and a tighter monogram/name/margins on the
+// placeholder. Grid-stretch + btnRow marginTop:auto still equalize heights and
+// bottom-align the buttons across photo/placeholder/batch. All knob-adjustable.
+const RANKER_DESKTOP = {
+  ...RANKER,
+  // text step-up (name unchanged: nameL 19 / name 22)
+  distL: { ...RANKER.distL, fontSize: 12 },
+  dist: { ...RANKER.dist, fontSize: 12 },
+  ratingNum: { ...RANKER.ratingNum, fontSize: 34 },
+  ratingCap: { ...RANKER.ratingCap, fontSize: 10 },
+  specFont: 14,
+  // compact the placeholder stack (was floating in blank field)
+  cardInner: { ...RANKER.cardInner, padding: "12px 14px 12px" },
+  monogram: "w-12 h-12 rounded-md mx-auto mb-2 block text-lg",
+  name: { ...RANKER.name, minHeight: 40, margin: "6px 0 2px" },
+  specWrap: { ...RANKER.specWrap, margin: "5px 0 0" },
+  ratingRow: { ...RANKER.ratingRow, margin: "10px 0 10px" },
+  // The photo card's height driver is the PLACEHOLDER (its monogram + stacked
+  // text is the tallest real content), so the photo card fills DOWN to it with
+  // the bottle image rather than leaving the old ~100px gap before the buttons.
+  // Slot sized just under the compacted placeholder's natural height so the
+  // placeholder stays the definer and the photo stretches only a hair. Wider
+  // (w-28) so squat bottles letterbox less inside the tall slot. Non-responsive
+  // — RANKER_DESKTOP only applies ≥768px.
+  photoInner: { ...RANKER.photoInner, padding: "12px 14px 12px" },
+  photoTop: { ...RANKER.photoTop, marginBottom: 10 },
+  // Rating anchored to the BOTTOM of the text column (marginTop:auto) so the
+  // right side fills to the tall bottle's base instead of stranding the rating
+  // at the top with blank beneath it: distillery/name/spec read at the top, the
+  // score sits just above the medal buttons.
+  ratingRowL: { ...RANKER.ratingRowL, marginTop: "auto", marginBottom: 0 },
+  photoImg: "w-28 h-[272px] rounded-md block shrink-0",
 };
