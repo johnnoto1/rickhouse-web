@@ -763,8 +763,57 @@ function VoteGate({ session, imageUrlById, children }) {
 // value corner. The signed-in user's own bottles are lifted out in gold.
 const MAP_MARGIN = { top: 24, right: 16, bottom: 34, left: 44 };
 // Human-friendly log ticks; only those inside the data's padded domain render.
+// This fixed ladder is the ALL-band (full-field) axis, kept exactly as-is.
 const PRICE_TICKS = [10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 const fmtPriceTick = (n) => (n >= 1000 ? "$" + n / 1000 + "k" : "$" + n);
+
+// Adaptive log ticks for a BAND's narrower domain, where the fixed ALL ladder
+// would leave one or two lonely ticks (bottom shelf's $15–$40 falls entirely
+// between $10 and $50). Builds "nice" values (1-1.5-2-3-4-5-6-8 per decade)
+// inside the padded [lo, hi]; if that's too dense for a wide band (top shelf
+// spans $100→several-thousand), it falls back to a coarse 1-2-5 ladder. Aims
+// for ~3–6 ticks so every band reads its own scale without crowding.
+function bandPriceTicks(lo, hi) {
+  const build = (mantissas) => {
+    const out = [];
+    for (let e = 0; e <= 5; e++) {
+      for (const m of mantissas) {
+        const v = m * 10 ** e;
+        if (v >= lo && v <= hi) out.push(v);
+      }
+    }
+    return out;
+  };
+  const fine = build([1, 1.5, 2, 3, 4, 5, 6, 8]);
+  if (fine.length <= 6) return fine;
+  const coarse = build([1, 2, 5]);
+  return coarse.length >= 2 ? coarse : fine;
+}
+
+// Deterministic [0,1) from a string (FNV-1a). Seeds the collision jitter per
+// bottle id so a dot's offset is fixed for that bottle forever — never random
+// per render — which is what keeps the map stable across re-renders and, in
+// particular, keeps the within-band Full-catalog toggle from moving any point.
+function hash01(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return ((h >>> 0) % 1000000) / 1000000;
+}
+
+// Collision-jitter dials (consumed by the `pos` relaxation in ValueMap). The
+// two that matter to the design are SEP_TARGET (how much daylight to open
+// between stacked dots) and CAP_FRACTION (the price-honesty ceiling). Marks are
+// r≈4, so SEP_TARGET ≈ 13px leaves ~a dot-diameter of gap between centers.
+const JITTER = {
+  COLLIDE_DIST: 9, // px: centers closer than this make a point a "mover"
+  SEP_TARGET: 13, // px: center-to-center spacing the relaxation opens stacks toward
+  CAP_FRACTION: 0.5, // max drift from true spot = this × the band's SMALLEST adjacent-tick gap (so a $50 dot can't read as $60)
+  ITERATIONS: 80, // fixed relaxation passes → deterministic/reproducible
+  STEP: 0.5, // per-pass relaxation factor (stability)
+};
 
 // One price-band truth, consumed identically by the Table filter and the Map's
 // rendered-point set. Basis is row.price — the resolved secondary → LINE PRICE
@@ -783,9 +832,12 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
   const [w, setW] = useState(0);
   const [active, setActive] = useState(null); // bottle_id of the tapped point
   // Field toggle: fade the full-catalog backdrop out, leaving only the user's
-  // own points on the SAME fixed frame (geom is always full-field, below, so
-  // nothing moves or rescales). Only offered when they actually have points to
-  // isolate — backdrop-only is already the empty state.
+  // own points on the SAME frame. geom is derived from renderPoints, which the
+  // toggle never changes (it only fades opacity), so the frame holds and no
+  // point moves when the field is toggled — WITHIN whatever band is active.
+  // (Choosing a different band DOES rescale the frame; the toggle never does.)
+  // Only offered when they actually have points to isolate — backdrop-only is
+  // already the empty state.
   const [showField, setShowField] = useState(true);
 
   // Callback ref, not useRef + mount effect: the chart container only enters
@@ -815,18 +867,27 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
     () => (rows ?? []).filter((r) => r.price != null && r.price > 0),
     [rows]
   );
-  // The price band filters what's DRAWN, never the domain: `geom` below stays
-  // computed from the full `points`, so the axes hold their full-field extent
-  // and no point ever moves when a band is chosen (the standing axis rule, same
-  // as the Full-catalog toggle). Points outside the band simply disappear.
+  // renderPoints is the currently VISIBLE set (all priceable points under ALL,
+  // else just the band's). It drives BOTH what's drawn AND `geom`'s domain
+  // below, so a band rescales its axes to fit its own points. The one thing it
+  // deliberately does NOT depend on is the Full-catalog toggle — that only
+  // fades opacity — which is what keeps the axis rule "fixed within a band."
   const inBand = bandTest(priceBand);
   const renderPoints = useMemo(
     () => (priceBand === "all" ? points : points.filter((p) => inBand(p.price))),
     [points, priceBand, inBand]
   );
 
+  // The frame is derived from renderPoints — the CURRENTLY VISIBLE set — so a
+  // band rescales to fit its own points instead of stranding them in a corner
+  // of the full-field domain (John's call from prod screenshots). This is
+  // identical to the old full-field behavior under ALL, where renderPoints IS
+  // points. Crucially it does NOT depend on showField/ownedRender, so the
+  // Full-catalog toggle still recomputes nothing and never moves a point WITHIN
+  // a band — the original fixed-axes rule, now scoped to "within a band."
+  const isAll = priceBand === "all";
   const geom = useMemo(() => {
-    if (!w || points.length === 0) return null;
+    if (!w || renderPoints.length === 0) return null;
     // Near-square on a phone, widening to landscape on desktop — the vertical
     // axis stays tall enough to read the rating spread at any width.
     const h = Math.max(300, Math.min(Math.round(w * 0.62), 460));
@@ -835,14 +896,18 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
     const plotW = w - MAP_MARGIN.left - MAP_MARGIN.right;
     const plotH = h - MAP_MARGIN.top - MAP_MARGIN.bottom;
 
-    const prices = points.map((p) => p.price);
+    const prices = renderPoints.map((p) => p.price);
     const minP = Math.min(...prices);
     const maxP = Math.max(...prices);
-    const loMin = Math.log10(minP * 0.85);
-    const loMax = Math.log10(maxP * 1.12);
+    // Padded domain edges (12–15% breathing room each side) so no point ever
+    // sits on the plot edge, at any band width.
+    const loEdge = minP * 0.85;
+    const hiEdge = maxP * 1.12;
+    const loMin = Math.log10(loEdge);
+    const loMax = Math.log10(hiEdge);
     const x = (price) => plotL + ((Math.log10(price) - loMin) / (loMax - loMin)) * plotW;
 
-    const ratings = points.map((p) => eloToDisplayRating(p.rating));
+    const ratings = renderPoints.map((p) => eloToDisplayRating(p.rating));
     const maxR = Math.max(...ratings);
     // Clean-gridline top with GUARANTEED headroom: keep the tallest point at
     // ≤90% of the axis (maxR / 0.9) so it never crowds the top-corner cues,
@@ -850,17 +915,113 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
     // (a plain ceil-to-1000 gave almost none when maxR sat just under one —
     // e.g. prod's ~8600 → 9000, only 4% clear). Floored at 2000 so the flat
     // local board (every rating 1500 → ~1202) still has room; clamped to the
-    // display ceiling.
+    // display ceiling. Applied to the VISIBLE max, so a low-max band (bottom
+    // shelf ~2.3k) fills the height instead of hugging the floor.
     const yMax = Math.min(DISPLAY_MAX, Math.max(2000, Math.ceil(maxR / 0.9 / 1000) * 1000));
     const y = (rating) => plotT + plotH - (rating / yMax) * plotH;
 
-    const yStep = yMax <= 2000 ? 500 : 2000;
+    // yStep: keep ALL's 2000-step ladder (large yMax) exactly as before; give a
+    // low-max band enough gridlines to read (1000-step) without over-drawing.
+    const yStep = yMax <= 2500 ? 500 : yMax <= 4000 ? 1000 : 2000;
     const yTicks = [];
     for (let t = 0; t <= yMax; t += yStep) yTicks.push(t);
-    const xTicks = PRICE_TICKS.filter((t) => t >= minP * 0.85 && t <= maxP * 1.12);
+    // ALL keeps the fixed ladder verbatim; a band regenerates band-appropriate
+    // ticks for its own (usually much narrower) domain.
+    const xTicks = isAll
+      ? PRICE_TICKS.filter((t) => t >= loEdge && t <= hiEdge)
+      : bandPriceTicks(loEdge, hiEdge);
 
     return { h, plotL, plotT, plotW, plotH, x, y, yMax, yTicks, xTicks };
-  }, [w, points]);
+  }, [w, renderPoints, isAll]);
+
+  // Collision jitter → bottle_id -> {x, y} the whole map draws from (backdrop,
+  // owned marks, hit targets, tooltip anchor all read this ONE map, so a dot's
+  // mark and its tap target never diverge). Deterministic and depends only on
+  // [geom, renderPoints] — NOT showField — so points never move on the
+  // Full-catalog toggle and re-renders are pixel-stable.
+  //
+  // A DETERMINISTIC RELAXATION does the spreading (not a fixed ring, which
+  // couldn't separate a big stack): only "movers" (points with a neighbor
+  // within COLLIDE_DIST) are pushed; isolated dots stay exactly on their true
+  // price/rating but still repel, so a fan can't land on them. Density scales
+  // itself — an 8-point stack repels for longer than a 2-point pair, so it
+  // opens a real fan while a pair barely moves. Displacement from the true
+  // position is capped at CAP_FRACTION × the band's smallest tick gap (an
+  // honesty ceiling in the band's own pixel scale — a $50 dot can't drift to
+  // read as $60), and every position is clamped to the plot so nothing clips an
+  // axis. Jacobi form (each pass reads a snapshot of the previous) makes it
+  // order-independent, and the only "randomness" is an id-seeded 0.01px tie-
+  // break so exactly-coincident dots have a direction to separate along — so
+  // the whole thing is reproducible.
+  const pos = useMemo(() => {
+    const map = new Map();
+    if (!geom) return map;
+    const n = renderPoints.length;
+    const bx = new Array(n), by = new Array(n), ids = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const p = renderPoints[i];
+      ids[i] = p.bottle_id;
+      bx[i] = geom.x(p.price);
+      by[i] = geom.y(eloToDisplayRating(p.rating));
+    }
+    // movers = points with at least one neighbor within COLLIDE_DIST
+    const cd2 = JITTER.COLLIDE_DIST * JITTER.COLLIDE_DIST;
+    const mover = new Array(n).fill(false);
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = bx[i] - bx[j], dy = by[i] - by[j];
+        if (dx * dx + dy * dy < cd2) { mover[i] = true; mover[j] = true; }
+      }
+    }
+    // Honesty cap: half the band's SMALLEST adjacent x-tick pixel gap — derived
+    // from the band's own scale, never hardcoded.
+    let minGap = Infinity;
+    for (let k = 1; k < geom.xTicks.length; k++) {
+      const g = Math.abs(geom.x(geom.xTicks[k]) - geom.x(geom.xTicks[k - 1]));
+      if (g < minGap) minGap = g;
+    }
+    const maxDisp = Number.isFinite(minGap) ? JITTER.CAP_FRACTION * minGap : JITTER.SEP_TARGET;
+
+    const x = bx.slice(), y = by.slice();
+    // id-seeded tie-break so coincident movers separate deterministically
+    for (let i = 0; i < n; i++) {
+      if (!mover[i]) continue;
+      const a = hash01(ids[i]) * Math.PI * 2;
+      x[i] += Math.cos(a) * 0.01;
+      y[i] += Math.sin(a) * 0.01;
+    }
+    const sep = JITTER.SEP_TARGET, sep2 = sep * sep;
+    const xMin = geom.plotL, xMax = geom.plotL + geom.plotW;
+    const yMin = geom.plotT, yMax2 = geom.plotT + geom.plotH;
+    for (let it = 0; it < JITTER.ITERATIONS; it++) {
+      const sx = x.slice(), sy = y.slice();
+      for (let i = 0; i < n; i++) {
+        if (!mover[i]) continue;
+        let dxs = 0, dys = 0;
+        for (let j = 0; j < n; j++) {
+          if (j === i) continue;
+          const dx = sx[i] - sx[j], dy = sy[i] - sy[j];
+          const d2 = dx * dx + dy * dy;
+          if (d2 < sep2 && d2 > 0) {
+            const d = Math.sqrt(d2);
+            const push = (sep - d) / 2;
+            dxs += (dx / d) * push;
+            dys += (dy / d) * push;
+          }
+        }
+        let nx = sx[i] + dxs * JITTER.STEP;
+        let ny = sy[i] + dys * JITTER.STEP;
+        // clamp drift-from-true to the honesty cap, then to the plot bounds
+        let ox = nx - bx[i], oy = ny - by[i];
+        const od = Math.hypot(ox, oy);
+        if (od > maxDisp) { const s = maxDisp / od; ox *= s; oy *= s; nx = bx[i] + ox; ny = by[i] + oy; }
+        x[i] = Math.max(xMin, Math.min(xMax, nx));
+        y[i] = Math.max(yMin, Math.min(yMax2, ny));
+      }
+    }
+    for (let i = 0; i < n; i++) map.set(ids[i], { x: x[i], y: y[i] });
+    return map;
+  }, [geom, renderPoints]);
 
   // Active point resolves against the rendered (band-filtered) set, so tapping
   // a point and then choosing a band it falls outside of clears the tooltip
@@ -1015,7 +1176,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
                     fontFamily="Georgia, serif"
                     fill="#7A5A2E"
                   >
-                    PRICE (LOG)
+                    PRICE (LOG SCALE)
                   </text>
                   <text
                     transform={`rotate(-90 11 ${geom.plotT + geom.plotH / 2})`}
@@ -1041,8 +1202,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
                     {renderPoints
                       .filter((p) => !ownedParentIds.has(p.bottle_id))
                       .map((p) => {
-                        const cx = geom.x(p.price);
-                        const cy = geom.y(eloToDisplayRating(p.rating));
+                        const { x: cx, y: cy } = pos.get(p.bottle_id);
                         return p.priceIsFallback ? (
                           <circle
                             key={p.bottle_id}
@@ -1070,8 +1230,7 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
                       by price provenance so an MSRP-priced trophy isn't sold
                       as a value even when it's yours. */}
                   {ownedRender.map((p) => {
-                      const cx = geom.x(p.price);
-                      const cy = geom.y(eloToDisplayRating(p.rating));
+                      const { x: cx, y: cy } = pos.get(p.bottle_id);
                       return p.priceIsFallback ? (
                         <circle
                           key={p.bottle_id}
@@ -1101,8 +1260,8 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
                   {(fieldShown ? renderPoints : ownedRender).map((p) => (
                     <circle
                       key={"hit" + p.bottle_id}
-                      cx={geom.x(p.price)}
-                      cy={geom.y(eloToDisplayRating(p.rating))}
+                      cx={pos.get(p.bottle_id).x}
+                      cy={pos.get(p.bottle_id).y}
                       r="11"
                       fill="transparent"
                       style={{ cursor: "pointer" }}
@@ -1118,8 +1277,8 @@ function ValueMap({ title, rows, ownedParentIds, headerRight, controls, priceBan
               {geom && activePoint && (
                 <MapTooltip
                   p={activePoint}
-                  left={geom.x(activePoint.price)}
-                  top={geom.y(eloToDisplayRating(activePoint.rating))}
+                  left={pos.get(activePoint.bottle_id).x}
+                  top={pos.get(activePoint.bottle_id).y}
                   width={w}
                 />
               )}
