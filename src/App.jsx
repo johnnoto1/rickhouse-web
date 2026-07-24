@@ -392,7 +392,7 @@ function Game({ session, view, goView }) {
               <div style={S.hint}>
                 {busy
                   ? "Pouring…"
-                  : "Assign one of each — Keep the best, Cut the worst."}
+                  : "Award the medals — 🥇 the best, 🥉 the worst."}
               </div>
             )}
           </div>
@@ -656,7 +656,7 @@ function VoteGate({ session, imageUrlById, children }) {
             <div style={S.gateHead}>
               <div style={S.gateKicker}>ONE POUR TO ENTER</div>
               <div style={S.gateTitle}>Cast a vote to see the rankings</div>
-              <div style={S.gateSub}>Keep the best, cut the worst.</div>
+              <div style={S.gateSub}>Rank all three — 🥇 the best, 🥉 the worst.</div>
             </div>
             <div style={S.gateBody}>
               <RankRound

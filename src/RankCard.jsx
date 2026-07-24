@@ -25,11 +25,23 @@ import { eloToDisplayRating } from "./ratingDisplay.js";
 //   - inner .swapIn div key: ranker keys it by bottle id so a swapped-in
 //     replacement remounts and replays the swap-in animation; the gate never
 //     swaps, so it stays position-keyed (no replay).
+// Role = the vote semantics (keep/trade/cut), unchanged. `aria` is the
+// accessible name the button keeps regardless of what it shows visually.
 const ROLES = [
-  { key: "keep", label: "KEEP" },
-  { key: "trade", label: "TRADE" },
-  { key: "cut", label: "CUT" },
+  { key: "keep", aria: "Keep" },
+  { key: "trade", aria: "Trade" },
+  { key: "cut", aria: "Cut" },
 ];
+
+// Button label parts, keyed by role (keep→1st, trade→2nd, cut→3rd). Split so
+// the medal glyph scales independently of the ordinal text. Single constants —
+// cheap to reskin (themed SVG medals) or resize later. Purely presentational;
+// vote semantics untouched.
+const ROLE_MEDALS = { keep: "🥇", trade: "🥈", cut: "🥉" };
+const ROLE_LABELS = { keep: "1st", trade: "2nd", cut: "3rd" };
+// Medal glyph size as a multiple of the button font-size — the size knob (like
+// SPEC_FONT_*). Buttons grow taller uniformly at higher values.
+const MEDAL_SCALE = 2;
 
 // The two size knobs for the spec lines (font px per surface) — cheap to nudge
 // after seeing prod. Spacing / letter-spacing / color follow the meta treatment.
@@ -127,8 +139,12 @@ export default function RankCard({
           className={"roleBtn roleBtn-" + r.key + (role === r.key ? " roleOn" : "")}
           disabled={resolved || busy}
           onClick={() => onAssign(r.key)}
+          aria-label={r.aria}
         >
-          {r.label}
+          <span aria-hidden="true" style={{ fontSize: `${MEDAL_SCALE}em`, verticalAlign: "middle", marginRight: "0.28em" }}>
+            {ROLE_MEDALS[r.key]}
+          </span>
+          <span style={{ verticalAlign: "middle" }}>{ROLE_LABELS[r.key]}</span>
         </button>
       ))}
     </div>
