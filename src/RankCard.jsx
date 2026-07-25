@@ -73,8 +73,12 @@ const ROLE_LABELS = { keep: "1st", trade: "2nd", cut: "3rd" };
 // glyph sits on top; the ordinal reads as a small caption beneath it (stacked
 // layout enforced in the button below). Ordinal is deliberately small so the
 // buttons eat less card height.
-const MEDAL_SCALE = 4;
-const ORDINAL_SCALE = 1.2;
+// Medal button scale (glyph + ordinal). Dropped to 75% of the old 4 / 1.2 after
+// prod review; the .roleBtn vertical padding in App.jsx's CSS is scaled to match
+// (9px→7px) so the button's proportions hold. Shared across every surface and
+// viewport; mobile buttons stay well above the ~44px thumb-target minimum.
+const MEDAL_SCALE = 3;
+const ORDINAL_SCALE = 0.9;
 
 // The spec-line font is now a per-surface knob IN the style tables (s.specFont),
 // alongside every other size, so the desktop gate can step it up with the rest
@@ -185,7 +189,7 @@ export default function RankCard({
           // Always stacked: medal on top, ordinal centered beneath it. A flex
           // column with centered alignment makes medal-left/text-right wrapping
           // impossible regardless of button width.
-          style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2px" }}
+          style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "1.5px" }}
         >
           <span aria-hidden="true" style={{ fontSize: `${MEDAL_SCALE}em`, lineHeight: 1 }}>
             {ROLE_MEDALS[r.key]}
@@ -293,10 +297,10 @@ const GATE = {
 const GATE_DESKTOP = {
   ...GATE,
   distL: { ...GATE.distL, fontSize: 10 },
-  nameL: { ...GATE.nameL, fontSize: 20 },
+  nameL: { ...GATE.nameL, fontSize: 22 },
   ratingRowL: { ...GATE.ratingRowL, margin: "10px 0 0" },
   dist: { ...GATE.dist, fontSize: 10 },
-  name: { ...GATE.name, fontSize: 20 },
+  name: { ...GATE.name, fontSize: 22 },
   ratingNum: { ...GATE.ratingNum, fontSize: 27 },
   ratingCap: { ...GATE.ratingCap, fontSize: 9 },
   specFont: 12,
@@ -360,8 +364,10 @@ const RANKER = {
 // bottom-align the buttons across photo/placeholder/batch. All knob-adjustable.
 const RANKER_DESKTOP = {
   ...RANKER,
-  // text step-up (name unchanged: nameL 19 / name 22)
+  // text step-up: photo name 19→22 to match the placeholder's 22 (prod review —
+  // bigger bottle name); dist/spec/rating stepped for the roomy desktop card.
   distL: { ...RANKER.distL, fontSize: 12 },
+  nameL: { ...RANKER.nameL, fontSize: 22 },
   dist: { ...RANKER.dist, fontSize: 12 },
   ratingNum: { ...RANKER.ratingNum, fontSize: 34 },
   ratingCap: { ...RANKER.ratingCap, fontSize: 10 },

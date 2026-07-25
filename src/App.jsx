@@ -2059,7 +2059,7 @@ const CSS = `
 .label-keep  { box-shadow: 0 0 0 3px ${MEDAL_GOLD}, 0 10px 30px rgba(0,0,0,0.45); }
 .label-trade { box-shadow: 0 0 0 3px ${MEDAL_SILVER}, 0 10px 30px rgba(0,0,0,0.45); }
 .label-cut   { box-shadow: 0 0 0 3px ${MEDAL_BRONZE}, 0 10px 30px rgba(0,0,0,0.45); opacity: .92; }
-.roleBtn { flex: 1; padding: 9px 0; font-family: Georgia, serif; font-size: 11px; letter-spacing: 0.2em; font-weight: 700; cursor: pointer; background: transparent; border: 1px solid #8A6A3A; color: #7A5A2E; transition: all .12s; }
+.roleBtn { flex: 1; padding: 7px 0; font-family: Georgia, serif; font-size: 11px; letter-spacing: 0.2em; font-weight: 700; cursor: pointer; background: transparent; border: 1px solid #8A6A3A; color: #7A5A2E; transition: all .12s; }
 .roleBtn:hover:not(:disabled) { border-color: #2A1B0C; color: #2A1B0C; }
 .roleBtn:disabled { cursor: default; opacity: .6; }
 .roleBtn-keep.roleOn  { background: ${MEDAL_GOLD}; border-color: ${MEDAL_GOLD}; color: #2A1B0C; opacity: 1; }
