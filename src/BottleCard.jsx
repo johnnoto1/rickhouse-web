@@ -36,7 +36,12 @@ function ageLabel(b) {
 function proofLabel(b) {
   if (!b) return "—";
   if (b.proof != null) return fmtProof(b.proof);
-  return b.proof_display || "—";
+  // proof_display is a varies-by-batch string that usually ends in "proof"
+  // (e.g. "118–140 proof"); under the card's own "PROOF" label that trailing
+  // word reads redundantly ("PROOF: 118–140 PROOF"). Strip it here at the
+  // display layer only — the stored value and RankCard's usage are untouched.
+  if (b.proof_display) return b.proof_display.replace(/\s*proof\s*$/i, "").trim() || "—";
+  return "—";
 }
 
 function typeLabel(b) {
