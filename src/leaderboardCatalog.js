@@ -46,7 +46,7 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
   let query = supabase
     .from("bottle_ratings")
     .select(
-      "bottle_id, rating, wins, losses, rounds_played, bottles!inner(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, release_year, image_url, rankable)"
+      "bottle_id, rating, wins, losses, rounds_played, bottles!inner(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, type_label, age_band, age_years, proof_display, release_year, image_url, rankable)"
     )
     .order("rating", { ascending: false })
     // Safety ceiling only, deliberately above the full rankable catalog
@@ -93,7 +93,7 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
     const { data: parents } = await supabase
       .from("bottles")
       .select(
-        "id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, release_year, image_url, rankable"
+        "id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, type_label, age_band, age_years, proof_display, release_year, image_url, rankable"
       )
       .in("id", missingParentIds)
       .eq("status", "active");

@@ -10,6 +10,7 @@ import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
 import { eloToDisplayRating, DISPLAY_MAX } from "./ratingDisplay.js";
 import RankRound from "./RankRound.jsx";
 import RankCard from "./RankCard.jsx";
+import BottleCard from "./BottleCard.jsx";
 
 const TYPE_KEYS = ["bourbon", "rye", "other"];
 const TYPE_LABELS = { bourbon: "Bourbon", rye: "Rye", other: "Other" };
@@ -1381,6 +1382,49 @@ function Board({ title, rows, empty, sortable = false, headerRight, controls, se
   const [recentOnly, setRecentOnly] = useState(false);
   const [showTierMarks, setShowTierMarks] = useState(true);
 
+  // --- Bottle info card (KTC-style popup) ----------------------------------
+  // Split by pointer capability: hover-capable devices get an anchored popover
+  // on ~150ms hover intent (row click still navigates); touch devices get a
+  // bottom sheet on tap (the sheet's "View Bottle" CTA navigates instead).
+  const hoverCapable = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(hover: hover) and (pointer: fine)").matches,
+    []
+  );
+  // One card at a time, driven from Board (not per-row) so a 200-row board
+  // mounts a single BottleCard. Carries everything the card renders plus the
+  // trigger node, so focus can return to the row on close.
+  const [activeCard, setActiveCard] = useState(null);
+  const openTimer = useRef(null);
+  const closeTimer = useRef(null);
+  const clearTimers = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    openTimer.current = null;
+    closeTimer.current = null;
+  };
+  const closeCard = (restoreFocus) => {
+    clearTimers();
+    setActiveCard((prev) => {
+      if (restoreFocus && prev?.triggerEl?.isConnected) prev.triggerEl.focus();
+      return null;
+    });
+  };
+  // Hover intent: open after a dwell, and a short close delay the card itself
+  // can cancel (onPointerEnter) so moving the mouse row->card never dismisses.
+  const scheduleOpen = (payload) => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (openTimer.current) clearTimeout(openTimer.current);
+    openTimer.current = setTimeout(() => setActiveCard(payload), 150);
+  };
+  const scheduleClose = () => {
+    if (openTimer.current) clearTimeout(openTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setActiveCard(null), 120);
+  };
+  useEffect(() => () => clearTimers(), []);
+
   const clickSort = (key) => {
     if (sortKey === key) setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     else {
@@ -1543,6 +1587,18 @@ function Board({ title, rows, empty, sortable = false, headerRight, controls, se
     return map;
   }, [tierBands]);
 
+  // Every row index -> its tier number, so the info card can label a row's tier
+  // (the separators map only carries each band's FIRST row). Derived from the
+  // same tierBands — no re-run of the gap-finder. Empty when tiers are hidden
+  // or the sort isn't rating-desc; the card just omits the tier label then.
+  const tierByIndex = useMemo(() => {
+    const map = new Map();
+    tierBands.forEach((band) => {
+      for (let i = band.start; i <= band.end; i++) map.set(i, band.tierNumber);
+    });
+    return map;
+  }, [tierBands]);
+
   const hdrStyle = (key, base) => ({
     ...base,
     color: sortKey === key ? "#A6521B" : "#7A5A2E",
@@ -1653,12 +1709,59 @@ function Board({ title, rows, empty, sortable = false, headerRight, controls, se
               const rank = sortable ? r.ratingRank : i + 1;
               const slug = r.bottles?.slug;
               const tierNumber = tierSeparators.get(i);
+              // Info card is offered on real rankable rows only — virtual-parent
+              // fold-header rows (isVirtualParent) stay inert: they keep the
+              // plain navigate-on-click Link and never open a card.
+              const cardEligible = sortable && !r.isVirtualParent && !!slug;
+              const cardPayload = () => ({
+                row: r,
+                rank,
+                tierNumber: tierByIndex.get(i) ?? null,
+                provisional,
+              });
               // Whole row is tappable to /bottle/:slug when we have one (only the
               // Leaderboard query selects slug). Sort-header clicks live in the
               // separate .colHeaderRow sibling above, never inside a .row, so
               // there's no click-bubbling conflict to guard against here.
-              const RowTag = slug ? Link : "div";
-              const rowProps = slug ? { to: `/bottle/${slug}` } : {};
+              //
+              // Card wiring splits by pointer capability:
+              //   hover-capable — row stays a <Link> (click still navigates);
+              //     hover intent opens the anchored popover.
+              //   touch — row becomes a role=button <div> so a tap opens the
+              //     sheet instead of navigating; the sheet's CTA navigates.
+              let RowTag = slug ? Link : "div";
+              let rowProps = slug ? { to: `/bottle/${slug}` } : {};
+              let rowClass = "row";
+              if (cardEligible && hoverCapable) {
+                rowProps = {
+                  ...rowProps,
+                  onMouseEnter: (e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const el = e.currentTarget;
+                    scheduleOpen({ ...cardPayload(), anchorRect: rect, triggerEl: el });
+                  },
+                  onMouseLeave: scheduleClose,
+                };
+              } else if (cardEligible) {
+                RowTag = "div";
+                rowClass = "row rowTap";
+                const open = (e) => {
+                  const el = e.currentTarget;
+                  setActiveCard({ ...cardPayload(), triggerEl: el });
+                };
+                rowProps = {
+                  role: "button",
+                  tabIndex: 0,
+                  "aria-haspopup": "dialog",
+                  onClick: open,
+                  onKeyDown: (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      open(e);
+                    }
+                  },
+                };
+              }
               return (
                 <Fragment key={i}>
                   {tierNumber != null && (
@@ -1668,7 +1771,7 @@ function Board({ title, rows, empty, sortable = false, headerRight, controls, se
                       <span className="tierSeparatorLine" />
                     </div>
                   )}
-                  <RowTag className="row" {...rowProps}>
+                  <RowTag className={rowClass} {...rowProps}>
                     <span style={S.rankCell}>{rank}</span>
                     <span style={S.rowNameWrap}>
                       <span style={S.rowNameText}>{r.bottles?.name}</span>
@@ -1733,6 +1836,21 @@ function Board({ title, rows, empty, sortable = false, headerRight, controls, se
           </div>
         )}
       </div>
+      {activeCard && (
+        <BottleCard
+          row={activeCard.row}
+          rank={activeCard.rank}
+          tierNumber={activeCard.tierNumber}
+          provisional={activeCard.provisional}
+          mode={hoverCapable ? "popover" : "sheet"}
+          anchorRect={activeCard.anchorRect}
+          onClose={() => closeCard(!hoverCapable)}
+          onPointerEnter={() => {
+            if (closeTimer.current) clearTimeout(closeTimer.current);
+          }}
+          onPointerLeave={scheduleClose}
+        />
+      )}
     </main>
   );
 }
@@ -2071,6 +2189,10 @@ const CSS = `
 a.row { text-decoration: none; color: inherit; cursor: pointer; }
 a.row:hover { background: rgba(232,180,90,0.18); transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.15); position: relative; z-index: 1; }
 a.row:focus-visible { outline: 2px solid #E8B45A; outline-offset: -2px; }
+/* Touch-device rows are role=button <div>s (tap opens the info sheet instead
+   of navigating) — give them the same tappable affordance a.row has. */
+.rowTap { cursor: pointer; }
+.rowTap:focus-visible { outline: 2px solid #E8B45A; outline-offset: -2px; }
 .tierMarkToggle { background: none; border: none; padding: 2px 6px; font-family: Georgia, serif; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: #7A5A2E; cursor: pointer; }
 .tierMarkToggle:hover { color: #A6521B; }
 @media (prefers-reduced-motion: reduce) { .row { transition: none; } }
@@ -2084,4 +2206,18 @@ a.row:focus-visible { outline: 2px solid #E8B45A; outline-offset: -2px; }
 .swapIn { animation: swapIn .3s ease; }
 @keyframes swapIn { from { opacity: 0; transform: scale(0.94); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .label, .pourBtn, .tab, .roleBtn, .swapX { transition: none; } .delta, .swapIn { animation: none; } }
+/* Bottle info card — mobile bottom sheet. Mirrors the vote-gate overlay/modal
+   (dvh anchoring so it sits at the VISIBLE viewport bottom on iOS; slide-up;
+   dimmed backdrop that closes on tap). The popover (desktop) is fully inline
+   styled in BottleCard; only the sheet needs these shared, animated rules. */
+.bottleCardOverlay { position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 60; display: flex; align-items: flex-end; justify-content: center; background: rgba(10,6,2,0.74); overflow: hidden; }
+.bottleCardSheet { position: relative; background: #F1E6CE; color: #2A1B0C; border: 1px solid #8A6A3A; border-radius: 14px 14px 0 0; width: 100%; max-width: 520px; box-shadow: 0 -10px 40px rgba(0,0,0,0.5); animation: gateUp .25s ease; padding-bottom: 14px; }
+@media (min-width: 600px) { .bottleCardOverlay { align-items: center; padding: 20px; } .bottleCardSheet { border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,0.55); } }
+@media (prefers-reduced-motion: reduce) { .bottleCardSheet { animation: none; } }
+.bottleCardX { position: absolute; top: 8px; right: 8px; width: 26px; height: 26px; border-radius: 50%; border: 1px solid #8A6A3A; background: #F1E6CE; color: #7A5A2E; font-size: 16px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .12s; z-index: 2; }
+.bottleCardX:hover { border-color: #A03325; color: #A03325; }
+.bottleCardX:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+.bottleCardCta { display: block; margin: 4px 14px 0; padding: 12px 0; text-align: center; background: #E8B45A; color: #2A1B0C; text-decoration: none; font-family: Georgia, serif; font-size: 13px; letter-spacing: 0.28em; font-weight: 700; text-transform: uppercase; border-radius: 6px; }
+.bottleCardCta:hover { background: #F0C271; }
+.bottleCardCta:focus-visible { outline: 2px solid #2A1B0C; outline-offset: 2px; }
 `;
