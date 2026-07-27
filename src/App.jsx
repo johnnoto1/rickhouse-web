@@ -1901,8 +1901,10 @@ const S = {
     fontWeight: 700, color: "#E8B45A", lineHeight: 1.05,
     textShadow: "0 2px 0 #5A3A12",
   },
-  // The leading "d" carries the orange accent; "ranker" keeps the gold.
-  brandD: { color: "#A6521B" },
+  // The leading "d" carries the bronze accent; "ranker" keeps the gold. Bronze
+  // rather than the #A6521B orange: at ~4:1 on the page background it clears
+  // the 3:1 large-text contrast floor the orange sat under.
+  brandD: { color: "#B08040" },
   brandSub: {
     fontSize: 12, letterSpacing: "0.45em", color: "#C9A96E", marginTop: 6,
     borderTop: "1px solid #5A3A12", borderBottom: "1px solid #5A3A12",

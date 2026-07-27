@@ -162,7 +162,7 @@ function Page({ children }) {
           </Link>
           <Link
             to="/"
-            className="text-amber-700 hover:text-amber-400 text-xs tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+            className="text-amber-700 hover:text-amber-400 text-xs uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
           >
             drink · rank · repeat
           </Link>
