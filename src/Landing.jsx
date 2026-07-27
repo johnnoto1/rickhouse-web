@@ -153,9 +153,8 @@ export default function Landing() {
 
         {/* Compact hero band — brand + headline + CTAs, no photo. */}
         <header className="text-center mb-6">
-          <div className="text-[10px] uppercase tracking-[0.5em] text-[#B08040]">The</div>
           <div className="text-[clamp(24px,4vw,36px)] font-bold tracking-[0.1em] text-[#E8B45A] leading-none [text-shadow:0_2px_0_#5A3A12]">
-            RICKHOUSE
+            <span className="text-[#A6521B]">d</span>ranker
           </div>
           <h1 className="mt-3 text-amber-200 font-bold text-xl sm:text-2xl leading-tight">
             Whiskey rankings, built by the community

@@ -1862,9 +1862,10 @@ function Shell({ children, view, goView }) {
       <style>{CSS}</style>
       <header style={S.header}>
         <div style={S.brand}>
-          <span style={S.brandTop}>THE</span>
-          <span style={S.brandMain}>RICKHOUSE</span>
-          <span style={S.brandSub}>KEEP · TRADE · CUT</span>
+          <span style={S.brandMain}>
+            <span style={S.brandD}>d</span>ranker
+          </span>
+          <span style={S.brandSub}>drink · rank · repeat</span>
         </div>
         <nav style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 14 }}>
           <button
@@ -1895,12 +1896,13 @@ const S = {
   },
   header: { padding: "28px 20px 0", textAlign: "center" },
   brand: { display: "flex", flexDirection: "column", alignItems: "center" },
-  brandTop: { fontSize: 11, letterSpacing: "0.5em", color: "#B08040" },
   brandMain: {
     fontSize: "clamp(34px, 7vw, 56px)", letterSpacing: "0.12em",
     fontWeight: 700, color: "#E8B45A", lineHeight: 1.05,
     textShadow: "0 2px 0 #5A3A12",
   },
+  // The leading "d" carries the orange accent; "ranker" keeps the gold.
+  brandD: { color: "#A6521B" },
   brandSub: {
     fontSize: 12, letterSpacing: "0.45em", color: "#C9A96E", marginTop: 6,
     borderTop: "1px solid #5A3A12", borderBottom: "1px solid #5A3A12",

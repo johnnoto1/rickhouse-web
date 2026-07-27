@@ -256,9 +256,9 @@ function Shelf({ session, userId }) {
         <div className="mb-5 flex items-center justify-between">
           <Link
             to="/"
-            className="text-amber-700 hover:text-amber-400 text-xs uppercase tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+            className="text-amber-700 hover:text-amber-400 text-xs tracking-widest focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
           >
-            ← Keep · Trade · Cut
+            ← drink · rank · repeat
           </Link>
           <Link
             to="/trade"
@@ -269,8 +269,8 @@ function Shelf({ session, userId }) {
         </div>
 
         <header className="text-center mb-6">
-          <div className="text-[11px] uppercase tracking-[0.35em] text-amber-600">
-            The Rickhouse
+          <div className="text-[11px] tracking-[0.35em] text-[#E8B45A]">
+            <span className="text-[#A6521B]">d</span>ranker
           </div>
           <h1 className="font-serif text-3xl sm:text-4xl text-amber-200 mt-1">
             Your Collection Ranked
