@@ -4,6 +4,7 @@ import { supabase } from "./supabaseClient";
 import { resolvePrice } from "./tradeValue.js";
 import { eloToDisplayRating } from "./ratingDisplay.js";
 import { fuzzyMatchBottles } from "./fuzzyMatch.js";
+import { versionBottleImage } from "./imageVersion.js";
 import ContributionGate from "./ContributionGate.jsx";
 import BottleImage from "./BottleImage.jsx";
 import NewBottleForm from "./NewBottleForm.jsx";
@@ -88,13 +89,13 @@ function Shelf({ session, userId }) {
   const loadCatalog = () =>
     supabase
       .from("bottle_ratings")
-      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type, image_url)")
+      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type, image_url, image_version)")
       .order("rating", { ascending: false })
       .then(({ data }) => {
         setCatalog(
           (data ?? [])
             .filter((row) => row.bottles?.status === "active")
-            .map((row) => ({ ...row.bottles, rating: row.rating ?? 1500 }))
+            .map((row) => ({ ...versionBottleImage(row.bottles), rating: row.rating ?? 1500 }))
         );
       });
 
@@ -102,11 +103,13 @@ function Shelf({ session, userId }) {
     supabase
       .from("collections")
       .select(
-        "id, added_at, status, purchase_price, acquired_date, notes, designation, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, image_url, bottle_ratings(rating, wins, losses))"
+        "id, added_at, status, purchase_price, acquired_date, notes, designation, bottles(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, image_url, image_version, bottle_ratings(rating, wins, losses))"
       )
       .eq("user_id", userId)
       .order("added_at", { ascending: false })
-      .then(({ data }) => setRows(data ?? []));
+      .then(({ data }) =>
+        setRows((data ?? []).map((r) => (r.bottles ? { ...r, bottles: versionBottleImage(r.bottles) } : r)))
+      );
 
   // Own proposals only (RLS enforces this regardless) — drives both the
   // inline "PENDING REVIEW" rows for new_bottle and the "My proposals"

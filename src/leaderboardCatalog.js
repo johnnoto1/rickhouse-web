@@ -35,6 +35,7 @@
 // done HERE, not in the fold, so VALUE/rank/provisional and every other
 // consumer stay consistent with zero special-casing downstream.
 import { normalizeValuePerDollar, resolvePrice } from "./tradeValue.js";
+import { versionBottleImage } from "./imageVersion.js";
 
 // Lower-median of a numeric list (already the "typical" middle value, robust
 // to a single outlier batch). Assumes a non-empty, ascending-sorted input.
@@ -46,7 +47,7 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
   let query = supabase
     .from("bottle_ratings")
     .select(
-      "bottle_id, rating, wins, losses, rounds_played, bottles!inner(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, type_label, age_band, age_years, proof_display, release_year, image_url, rankable)"
+      "bottle_id, rating, wins, losses, rounds_played, bottles!inner(id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, type_label, age_band, age_years, proof_display, release_year, image_url, image_version, rankable)"
     )
     .order("rating", { ascending: false })
     // Safety ceiling only, deliberately above the full rankable catalog
@@ -58,7 +59,13 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
   }
   const { data } = await query;
 
-  const rows = data ?? [];
+  // Version every image URL once, here, at the single fetch every board
+  // surface shares (leaderboard table, value-map card, ranker + gate cards via
+  // App.jsx's bottle_id -> url maps). Downstream code keeps passing a plain
+  // image_url around and gets cache-busting for free.
+  const rows = (data ?? []).map((r) =>
+    r.bottles ? { ...r, bottles: versionBottleImage(r.bottles) } : r
+  );
 
   // --- Virtual-parent reconstitution -------------------------------------
   // Group the fetched children by parent so a parent row (present or
@@ -93,7 +100,7 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
     const { data: parents } = await supabase
       .from("bottles")
       .select(
-        "id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, type_label, age_band, age_years, proof_display, release_year, image_url, rankable"
+        "id, slug, name, distillery, proof, msrp_usd, secondary_value, parent_id, type, type_label, age_band, age_years, proof_display, release_year, image_url, image_version, rankable"
       )
       .in("id", missingParentIds)
       .eq("status", "active");
@@ -105,7 +112,7 @@ export async function fetchLeaderboardCatalog(supabase, { rankableOnly = false }
       wins: 0,
       losses: 0,
       rounds_played: 0,
-      bottles: b,
+      bottles: versionBottleImage(b),
     }));
   }
 

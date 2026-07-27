@@ -7,6 +7,7 @@
 //
 // Used on every surface (ranker cards, vote-gate cards, bottle profile,
 // collection, shelf scan).
+import { versionedImageUrl } from "./imageVersion.js";
 
 // Photos are now TIGHT-CROPPED to the bottle's bounding box at source
 // (normalize_bottle_images.sh no longer pads to a square — the asset carries
@@ -53,7 +54,10 @@ export default function BottleImage({ bottle, rating, className = "", imageClass
     return (
       <div className={`shrink-0 ${imageClassName ?? className}`}>
         <img
-          src={bottle.image_url}
+          // Fetch sites already version their rows; this is the idempotent
+          // backstop for any caller that hands over a raw bottle row (it
+          // no-ops when the URL is versioned or image_version is absent).
+          src={versionedImageUrl(bottle.image_url, bottle.image_version)}
           alt={bottle.name ?? ""}
           className="w-full h-full object-contain block"
         />

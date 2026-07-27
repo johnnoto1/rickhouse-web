@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "./supabaseClient";
 import { fetchLeaderboardCatalog } from "./leaderboardCatalog.js";
+import { versionBottleImage } from "./imageVersion.js";
 import { eloToDisplayRating } from "./ratingDisplay.js";
 import ContributionGate from "./ContributionGate.jsx";
 import BottleImage from "./BottleImage.jsx";
@@ -37,7 +38,7 @@ export default function BottleProfile() {
 
       const { data: bottle } = await supabase
         .from("bottles")
-        .select("id, slug, name, distillery, msrp_usd, secondary_value, proof, proof_note, status, parent_id, image_url")
+        .select("id, slug, name, distillery, msrp_usd, secondary_value, proof, proof_note, status, parent_id, image_url, image_version")
         .eq("slug", slug)
         .maybeSingle();
 
@@ -95,7 +96,9 @@ export default function BottleProfile() {
       setState({
         status: "ok",
         session,
-        bottle,
+        // The hero photo is the biggest surface an overwrite lands on — it
+        // must carry ?v= like every other bottle image.
+        bottle: versionBottleImage(bottle),
         isVirtualParent,
         rating: ratingRow ?? { rating: 1500, wins: 0, losses: 0, rounds_played: 0 },
         snapshots: snapshots ?? [],
