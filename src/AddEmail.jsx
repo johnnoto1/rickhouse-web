@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { supabase } from "./supabaseClient";
+import { formatAuthError } from "./authErrors";
 
 // Anonymous → email upgrade. Shared by /rank (Game's "Sign in" tab) and
 // every contribution entry point (new_bottle / edit_field / price_report)
@@ -29,27 +30,33 @@ export default function AddEmail({ onDone, contextMessage }) {
   const send = async () => {
     setErr("");
     setEmailConflict(false);
-    if (path === "create") {
-      const { error } = await supabase.auth.updateUser(
-        { email },
-        { emailRedirectTo: window.location.origin }
-      );
-      if (error) {
-        if (error.code === "email_exists" || error.message?.includes("already been registered")) {
-          setEmailConflict(true);
+    try {
+      if (path === "create") {
+        const { error } = await supabase.auth.updateUser(
+          { email },
+          { emailRedirectTo: window.location.origin }
+        );
+        if (error) {
+          if (error.code === "email_exists" || error.message?.includes("already been registered")) {
+            setEmailConflict(true);
+          } else {
+            setErr(formatAuthError(error));
+          }
         } else {
-          setErr(error.message);
+          setSent(true);
         }
       } else {
-        setSent(true);
+        const { error } = await supabase.auth.signInWithOtp({
+          email,
+          options: { emailRedirectTo: window.location.origin },
+        });
+        if (error) setErr(formatAuthError(error));
+        else setSent(true);
       }
-    } else {
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.origin },
-      });
-      if (error) setErr(error.message);
-      else setSent(true);
+    } catch (e) {
+      // supabase-js rethrows anything that isn't an AuthError; without this
+      // the promise rejects and the card just sits there saying nothing.
+      setErr(formatAuthError(e));
     }
   };
 
