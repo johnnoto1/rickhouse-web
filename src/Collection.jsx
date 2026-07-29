@@ -89,13 +89,19 @@ function Shelf({ session, userId }) {
   const loadCatalog = () =>
     supabase
       .from("bottle_ratings")
-      .select("rating, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type, image_url, image_version)")
+      .select("rating, rounds_played, bottles!inner(id, slug, name, distillery, msrp_usd, secondary_value, parent_id, status, type, image_url, image_version)")
       .order("rating", { ascending: false })
       .then(({ data }) => {
         setCatalog(
           (data ?? [])
             .filter((row) => row.bottles?.status === "active")
-            .map((row) => ({ ...versionBottleImage(row.bottles), rating: row.rating ?? 1500 }))
+            // rounds_played rides along so the shelf-scan catalog search can rank a
+            // partial label read by how much the board has actually voted on it.
+            .map((row) => ({
+              ...versionBottleImage(row.bottles),
+              rating: row.rating ?? 1500,
+              rounds_played: row.rounds_played ?? 0,
+            }))
         );
       });
 

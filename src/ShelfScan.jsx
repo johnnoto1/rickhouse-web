@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { supabase, FN_URL } from "./supabaseClient";
 import BottleImage from "./BottleImage.jsx";
+import BottleSearchPanel from "./BottleSearchPanel.jsx";
 import NewBottleForm from "./NewBottleForm.jsx";
 import ContributionGate from "./ContributionGate.jsx";
 import SignInNudge from "./SignInNudge.jsx";
@@ -148,6 +149,15 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
   const [ambiguousChoice, setAmbiguousChoice] = useState([]); // bottleId | NEW | null
   const [unmatchedKeep, setUnmatchedKeep] = useState([]);
 
+  // Manual corrections. The scan's own answer is never mutated — these shadow
+  // it positionally, so a user can always see what changed and the candidate
+  // (and its release_designation) stays attached to the row.
+  const [matchedBottle, setMatchedBottle] = useState([]);      // bottle per matched row
+  const [ambiguousExtra, setAmbiguousExtra] = useState([]);    // bottle picked outside the offered options
+  const [unmatchedResolved, setUnmatchedResolved] = useState([]); // bottle | null: found in catalog after all
+  // Which row currently has its search panel open: `${kind}-${index}` or null.
+  const [searchOpen, setSearchOpen] = useState(null);
+
   const [submitting, setSubmitting] = useState(false);
   const [inlineError, setInlineError] = useState("");
 
@@ -173,6 +183,10 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
     setMatchedChecked(matched.map(() => true)); // pre-checked
     setAmbiguousChoice(ambiguous.map(() => null)); // none pre-selected
     setUnmatchedKeep(unmatched.map(() => true)); // pre-set to "submit as new"
+    setMatchedBottle(matched.map((m) => m.bottle));
+    setAmbiguousExtra(ambiguous.map(() => null));
+    setUnmatchedResolved(unmatched.map(() => null));
+    setSearchOpen(null);
     setInlineError("");
     setPhase("review");
   };
@@ -251,9 +265,16 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
   // count here (they write no collections row).
   const nMatched = matchedChecked.filter(Boolean).length;
   const nAmbiguousResolved = ambiguousChoice.filter((c) => c && c !== NEW).length;
-  const confirmCount = nMatched + nAmbiguousResolved;
+  // An unmatched row the user found in the catalog stops being a proposal and
+  // becomes an ordinary owned row, so it moves from newBottleCount to
+  // confirmCount — its checkbox now means "add this bottle", not "submit it".
+  const nUnmatchedResolved = unmatchedResolved.filter(
+    (b, i) => b && unmatchedKeep[i]
+  ).length;
+  const confirmCount = nMatched + nAmbiguousResolved + nUnmatchedResolved;
   const newBottleCount =
-    ambiguousChoice.filter((c) => c === NEW).length + unmatchedKeep.filter(Boolean).length;
+    ambiguousChoice.filter((c) => c === NEW).length +
+    unmatchedKeep.filter((keep, i) => keep && !unmatchedResolved[i]).length;
 
   const onConfirm = async () => {
     if (!scan) return;
@@ -267,7 +288,7 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
       if (matchedChecked[i]) {
         inserts.push({
           user_id: userId,
-          bottle_id: m.bottle.id,
+          bottle_id: (matchedBottle[i] ?? m.bottle).id,
           status: "sealed",
           designation: m.candidate.release_designation ?? null,
         });
@@ -281,6 +302,18 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
           bottle_id: choice,
           status: "sealed",
           designation: a.candidate.release_designation ?? null,
+        });
+      }
+    });
+
+    scan.unmatched.forEach((u, i) => {
+      const picked = unmatchedResolved[i];
+      if (picked && unmatchedKeep[i]) {
+        inserts.push({
+          user_id: userId,
+          bottle_id: picked.id,
+          status: "sealed",
+          designation: u.candidate.release_designation ?? null,
         });
       }
     });
@@ -300,7 +333,7 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
       if (ambiguousChoice[i] === NEW) nextQueue.push(a.candidate);
     });
     scan.unmatched.forEach((u, i) => {
-      if (unmatchedKeep[i]) nextQueue.push(u.candidate);
+      if (unmatchedKeep[i] && !unmatchedResolved[i]) nextQueue.push(u.candidate);
     });
 
     setSubmitting(false);
@@ -471,8 +504,16 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
               <GroupHeading>Matched</GroupHeading>
               <div className="space-y-2">
                 {matched.map((m, i) => {
-                  const dupCount = matched.slice(0, i).filter((x) => x.bottle.id === m.bottle.id).length;
-                  const alreadyOwned = (ownedCountByBottleId?.get(m.bottle.id) ?? 0) > 0;
+                  // Everything below reads the CORRECTED bottle, so a
+                  // replacement re-derives the ×N duplicate badge and the
+                  // already-owned hint instead of leaving them stale.
+                  const bottle = matchedBottle[i] ?? m.bottle;
+                  const dupCount = matched
+                    .slice(0, i)
+                    .filter((x, j) => (matchedBottle[j] ?? x.bottle).id === bottle.id).length;
+                  const alreadyOwned = (ownedCountByBottleId?.get(bottle.id) ?? 0) > 0;
+                  const corrected = bottle.id !== m.bottle.id;
+                  const openKey = `matched-${i}`;
                   return (
                     <label
                       key={i}
@@ -487,10 +528,10 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                         className="mt-1 h-4 w-4 accent-amber-600"
                         aria-label={`Add ${m.bottle.name}`}
                       />
-                      <BottleImage bottle={m.bottle} className="w-11 h-11 rounded text-xs" />
+                      <BottleImage bottle={bottle} className="w-11 h-11 rounded text-xs" />
                       <div className="flex-1 min-w-0">
                         <div className="font-serif font-bold text-stone-900 leading-tight flex items-center gap-2">
-                          <span className="truncate">{m.bottle.name}</span>
+                          <span className="truncate">{bottle.name}</span>
                           {dupCount > 0 && (
                             <span className="shrink-0 text-[10px] font-bold text-amber-800 border border-amber-500 rounded px-1">
                               ×{dupCount + 1}
@@ -498,7 +539,7 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                           )}
                         </div>
                         <div className="text-[11px] uppercase tracking-widest text-stone-500 mt-0.5">
-                          {m.bottle.distillery}
+                          {bottle.distillery}
                         </div>
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 text-xs text-stone-600">
                           <span>{scoreHint(m.score)}</span>
@@ -512,7 +553,37 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                               already in collection
                             </span>
                           )}
+                          {corrected && (
+                            <span className="text-[10px] uppercase tracking-wider text-emerald-700 border border-emerald-500 rounded px-1">
+                              corrected
+                            </span>
+                          )}
                         </div>
+
+                        {searchOpen === openKey ? (
+                          <BottleSearchPanel
+                            catalog={catalog}
+                            testId={`search-matched-${i}`}
+                            onCancel={() => setSearchOpen(null)}
+                            onPick={(b) => {
+                              setMatchedBottle((prev) => prev.map((v, j) => (j === i ? b : v)));
+                              setSearchOpen(null);
+                            }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`wrong-bottle-${i}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSearchOpen(openKey);
+                            }}
+                            className="mt-1.5 text-xs text-amber-800 underline underline-offset-2 hover:text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+                          >
+                            {corrected ? "change bottle" : "wrong bottle?"}
+                          </button>
+                        )}
                       </div>
                     </label>
                   );
@@ -560,6 +631,52 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                           </span>
                         </label>
                       ))}
+                      {ambiguousExtra[i] && (
+                        <label className="flex items-center gap-2.5 bg-stone-950/60 border border-emerald-700/60 rounded px-2.5 py-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name={`amb-${i}`}
+                            checked={ambiguousChoice[i] === ambiguousExtra[i].id}
+                            onChange={() =>
+                              setAmbiguousChoice((prev) =>
+                                prev.map((v, j) => (j === i ? ambiguousExtra[i].id : v))
+                              )
+                            }
+                            className="h-4 w-4 accent-amber-600"
+                          />
+                          <span className="flex-1 min-w-0">
+                            <span className="text-amber-100 font-serif truncate block">
+                              {ambiguousExtra[i].name}
+                            </span>
+                            <span className="text-[11px] text-stone-500 uppercase tracking-wider truncate block">
+                              {ambiguousExtra[i].distillery} · found by search
+                            </span>
+                          </span>
+                        </label>
+                      )}
+
+                      {searchOpen === `ambiguous-${i}` ? (
+                        <BottleSearchPanel
+                          catalog={catalog}
+                          testId={`search-ambiguous-${i}`}
+                          onCancel={() => setSearchOpen(null)}
+                          onPick={(b) => {
+                            setAmbiguousExtra((prev) => prev.map((v, j) => (j === i ? b : v)));
+                            setAmbiguousChoice((prev) => prev.map((v, j) => (j === i ? b.id : v)));
+                            setSearchOpen(null);
+                          }}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          data-testid={`search-none-${i}`}
+                          onClick={() => setSearchOpen(`ambiguous-${i}`)}
+                          className="text-xs text-amber-300 underline underline-offset-2 hover:text-amber-200 px-2.5 py-1 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+                        >
+                          None of these? Search the catalog
+                        </button>
+                      )}
+
                       <label className="flex items-center gap-2.5 px-2.5 py-2 cursor-pointer">
                         <input
                           type="radio"
@@ -584,33 +701,81 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
             <section>
               <GroupHeading>New to us</GroupHeading>
               <div className="space-y-2">
-                {unmatched.map((u, i) => (
-                  <label
-                    key={i}
-                    className="flex items-start gap-3 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={unmatchedKeep[i]}
-                      onChange={() =>
-                        setUnmatchedKeep((prev) => prev.map((v, j) => (j === i ? !v : v)))
-                      }
-                      className="mt-1 h-4 w-4 accent-amber-600"
-                      aria-label={`Submit ${candidateLabel(u.candidate)} as new bottle`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-amber-100">
-                        Read: <span className="font-semibold">{candidateLabel(u.candidate)}</span>
-                      </div>
-                      {u.candidate.release_designation && (
-                        <div className="text-[11px] uppercase tracking-wider text-amber-400/80 mt-0.5">
-                          {u.candidate.release_designation}
+                {unmatched.map((u, i) => {
+                  const found = unmatchedResolved[i];
+                  return (
+                    <label
+                      key={i}
+                      className={`flex items-start gap-3 rounded-md px-3 py-2.5 cursor-pointer border ${
+                        found
+                          ? "bg-emerald-950/30 border-emerald-800/60"
+                          : "bg-stone-900/60 border-stone-800"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={unmatchedKeep[i]}
+                        onChange={() =>
+                          setUnmatchedKeep((prev) => prev.map((v, j) => (j === i ? !v : v)))
+                        }
+                        className="mt-1 h-4 w-4 accent-amber-600"
+                        aria-label={
+                          found
+                            ? `Add ${found.name} to collection`
+                            : `Submit ${candidateLabel(u.candidate)} as new bottle`
+                        }
+                      />
+                      {found && <BottleImage bottle={found} className="w-11 h-11 rounded text-xs" />}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-amber-100">
+                          Read: <span className="font-semibold">{candidateLabel(u.candidate)}</span>
                         </div>
-                      )}
-                      <div className="text-xs text-stone-500 mt-0.5">Submit as new bottle</div>
-                    </div>
-                  </label>
-                ))}
+                        {u.candidate.release_designation && (
+                          <div className="text-[11px] uppercase tracking-wider text-amber-400/80 mt-0.5">
+                            {u.candidate.release_designation}
+                          </div>
+                        )}
+                        {found ? (
+                          <div className="mt-1">
+                            <div className="font-serif text-emerald-200 text-sm truncate">
+                              {found.name}
+                            </div>
+                            <div className="text-[11px] uppercase tracking-wider text-stone-500 truncate">
+                              {found.distillery} · adding from catalog
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-stone-500 mt-0.5">Submit as new bottle</div>
+                        )}
+
+                        {searchOpen === `unmatched-${i}` ? (
+                          <BottleSearchPanel
+                            catalog={catalog}
+                            testId={`search-unmatched-${i}`}
+                            onCancel={() => setSearchOpen(null)}
+                            onPick={(b) => {
+                              setUnmatchedResolved((prev) => prev.map((v, j) => (j === i ? b : v)));
+                              setSearchOpen(null);
+                            }}
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`find-in-catalog-${i}`}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setSearchOpen(`unmatched-${i}`);
+                            }}
+                            className="mt-1.5 text-xs text-amber-300 underline underline-offset-2 hover:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
+                          >
+                            {found ? "change bottle" : "Already in catalog? Find it"}
+                          </button>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })}
               </div>
             </section>
           )}
