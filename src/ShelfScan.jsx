@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { supabase, FN_URL } from "./supabaseClient";
 import BottleImage from "./BottleImage.jsx";
 import BottleSearchPanel from "./BottleSearchPanel.jsx";
@@ -275,6 +275,49 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
   const newBottleCount =
     ambiguousChoice.filter((c) => c === NEW).length +
     unmatchedKeep.filter((keep, i) => keep && !unmatchedResolved[i]).length;
+
+  // Dedupe guard. collections has NO unique (user_id, bottle_id) — it was
+  // dropped deliberately in 20260717000002 so the table holds one row per
+  // PHYSICAL bottle. Owning two of the same thing is therefore legal and a
+  // shelf photo can legitimately show two, which is why this WARNS rather than
+  // blocks or merges: silently collapsing them would lose a real bottle. What
+  // it prevents is the silent case — a correction landing on a bottle another
+  // row already resolved to, where nothing on screen would otherwise say so.
+  const pendingInserts = useMemo(() => {
+    if (!scan) return [];
+    const out = [];
+    scan.matched.forEach((m, i) => {
+      if (matchedChecked[i]) out.push({ key: `matched-${i}`, bottleId: (matchedBottle[i] ?? m.bottle).id });
+    });
+    scan.ambiguous.forEach((a, i) => {
+      const c = ambiguousChoice[i];
+      if (c && c !== NEW) out.push({ key: `ambiguous-${i}`, bottleId: c });
+    });
+    scan.unmatched.forEach((u, i) => {
+      if (unmatchedResolved[i] && unmatchedKeep[i]) {
+        out.push({ key: `unmatched-${i}`, bottleId: unmatchedResolved[i].id });
+      }
+    });
+    return out;
+  }, [scan, matchedChecked, matchedBottle, ambiguousChoice, unmatchedResolved, unmatchedKeep]);
+
+  // bottleId -> how many rows in THIS scan would insert it.
+  const pendingCountByBottleId = useMemo(() => {
+    const m = new Map();
+    pendingInserts.forEach((p) => m.set(p.bottleId, (m.get(p.bottleId) ?? 0) + 1));
+    return m;
+  }, [pendingInserts]);
+
+  // A row is a dupe-within-scan only if some OTHER row resolves to the same
+  // bottle; rowKey lets each row ask about itself without counting itself.
+  const dupInScan = (rowKey, bottleId) =>
+    (pendingCountByBottleId.get(bottleId) ?? 0) > 1 &&
+    pendingInserts.some((p) => p.bottleId === bottleId && p.key !== rowKey);
+
+  const alreadyOwnedCount = (bottleId) => ownedCountByBottleId?.get(bottleId) ?? 0;
+
+  const dupRowCount = pendingInserts.filter((p) => dupInScan(p.key, p.bottleId)).length;
+  const ownedRowCount = pendingInserts.filter((p) => alreadyOwnedCount(p.bottleId) > 0).length;
 
   const onConfirm = async () => {
     if (!scan) return;
@@ -553,6 +596,11 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                               already in collection
                             </span>
                           )}
+                          {matchedChecked[i] && dupInScan(`matched-${i}`, bottle.id) && (
+                            <span className="text-[10px] uppercase tracking-wider text-orange-800 border border-orange-500 rounded px-1">
+                              also elsewhere in this scan
+                            </span>
+                          )}
                           {corrected && (
                             <span className="text-[10px] uppercase tracking-wider text-emerald-700 border border-emerald-500 rounded px-1">
                               corrected
@@ -655,6 +703,17 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                         </label>
                       )}
 
+                      {ambiguousChoice[i] &&
+                        ambiguousChoice[i] !== NEW &&
+                        (dupInScan(`ambiguous-${i}`, ambiguousChoice[i]) ||
+                          alreadyOwnedCount(ambiguousChoice[i]) > 0) && (
+                          <p className="text-[11px] text-orange-300/90 px-2.5">
+                            {dupInScan(`ambiguous-${i}`, ambiguousChoice[i])
+                              ? "Another row in this scan already adds this bottle."
+                              : "This one is already in your collection."}
+                          </p>
+                        )}
+
                       {searchOpen === `ambiguous-${i}` ? (
                         <BottleSearchPanel
                           catalog={catalog}
@@ -743,6 +802,16 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
                             <div className="text-[11px] uppercase tracking-wider text-stone-500 truncate">
                               {found.distillery} · adding from catalog
                             </div>
+                            {unmatchedKeep[i] && dupInScan(`unmatched-${i}`, found.id) && (
+                              <p className="text-[11px] text-orange-300/90 mt-0.5">
+                                Another row in this scan already adds this bottle.
+                              </p>
+                            )}
+                            {unmatchedKeep[i] && alreadyOwnedCount(found.id) > 0 && (
+                              <p className="text-[11px] text-orange-300/90 mt-0.5">
+                                Already in your collection.
+                              </p>
+                            )}
                           </div>
                         ) : (
                           <div className="text-xs text-stone-500 mt-0.5">Submit as new bottle</div>
@@ -785,6 +854,28 @@ export default function ShelfScan({ session, userId, catalog, ownedCountByBottle
       {/* Bottom bar */}
       <div className="border-t border-stone-800 bg-stone-950 px-4 py-3">
         <div className="max-w-lg mx-auto">
+          {(dupRowCount > 0 || ownedRowCount > 0) && (
+            <div
+              data-testid="dupe-warning"
+              className="mb-2 rounded-md border border-orange-700/60 bg-orange-950/30 px-3 py-2 text-[12px] text-orange-200"
+            >
+              {dupRowCount > 0 && (
+                <div>
+                  {dupRowCount} row{dupRowCount === 1 ? " adds" : "s add"} a bottle another row
+                  in this scan already adds.
+                </div>
+              )}
+              {ownedRowCount > 0 && (
+                <div>
+                  {ownedRowCount} row{ownedRowCount === 1 ? " adds" : "s add"} a bottle already
+                  in your collection.
+                </div>
+              )}
+              <div className="text-orange-300/70 mt-0.5">
+                That&apos;s fine if you own more than one — untick any you don&apos;t want added twice.
+              </div>
+            </div>
+          )}
           {inlineError && <p className="text-red-400 text-sm mb-2 text-center">{inlineError}</p>}
           {newBottleCount > 0 && confirmCount > 0 && (
             <p className="text-stone-500 text-[11px] text-center mb-2">
