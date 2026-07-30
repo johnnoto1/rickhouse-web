@@ -1880,7 +1880,21 @@ function Shell({ children, view, goView }) {
       <div style={{ display: "flex", flexDirection: "column", flex: 1, alignItems: "center" }}>
         {children}
       </div>
-      <footer style={S.footer}>AGED IN CHARRED OAK · RATINGS BY ELO</footer>
+      <footer style={S.footer}>
+        {/* Decorative wax-seal mark — the header wordmark above already names
+            the site, so this is alt=""/aria-hidden. Header stays wordmark-only. */}
+        <img
+          src="/brand/seal.webp"
+          alt=""
+          aria-hidden="true"
+          width={96}
+          height={96}
+          loading="lazy"
+          decoding="async"
+          style={{ display: "block", width: 96, height: 96, margin: "0 auto 12px" }}
+        />
+        AGED IN CHARRED OAK · RATINGS BY ELO
+      </footer>
     </div>
   );
 }

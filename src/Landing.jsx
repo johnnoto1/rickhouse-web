@@ -149,40 +149,70 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#17100A_0%,#1E1409_55%,#17100A_100%)] text-[#F1E6CE] font-serif">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
 
-        {/* Compact hero band — brand + headline + CTAs, no photo. */}
-        <header className="text-center mb-6">
-          <div className="text-[clamp(24px,4vw,36px)] font-bold tracking-[0.1em] text-[#E8B45A] leading-none [text-shadow:0_2px_0_#5A3A12]">
-            <span className="text-[#B08040]">d</span>ranker
-          </div>
-          <h1 className="mt-3 text-amber-200 font-bold text-xl sm:text-2xl leading-tight">
-            Whiskey rankings, built by the community
-          </h1>
-          <p className="mt-2 text-[#C9A96E] text-sm max-w-xl mx-auto">
-            Every rating is earned head-to-head — real drinkers voting bottle versus bottle, no critics and no paid scores.
-          </p>
-          <div className="mt-4 flex flex-wrap justify-center gap-3">
-            <Link
-              to="/rank"
-              className="rounded-md bg-[#E8B45A] text-[#2A1B0C] border border-[#E8B45A] font-bold uppercase tracking-[0.25em] text-xs px-6 py-2.5 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
-            >
-              Start Ranking
-            </Link>
-            <Link
-              to="/leaderboard"
-              className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs uppercase tracking-widest px-6 py-2.5"
-            >
-              Rankings
-            </Link>
-            <Link
-              to="/trade"
-              className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs uppercase tracking-widest px-6 py-2.5"
-            >
-              Trade Calculator
-            </Link>
-          </div>
-        </header>
+      {/* Full-bleed photographic hero. The <img> (not a CSS background) is what
+          lets the browser pick 800w vs 1600w off srcset — a background-image
+          can't be served responsively. It's decorative, so it's alt=""/aria-
+          hidden and the copy above it carries all the meaning. It sits OUTSIDE
+          the max-w-5xl wrapper so the photo bleeds edge-to-edge while the text
+          stays on the same measure as the dashboard below. */}
+      <section className="relative isolate overflow-hidden">
+        <img
+          src="/brand/hero-1600.webp"
+          srcSet="/brand/hero-800.webp 800w, /brand/hero-1600.webp 1600w"
+          sizes="100vw"
+          alt=""
+          aria-hidden="true"
+          fetchPriority="high"
+          decoding="async"
+          className="absolute inset-0 h-full w-full object-cover object-center"
+        />
+        {/* Lighter at the top (the glasses stay legible) and near-opaque at the
+            bottom, where the card and CTAs need the contrast. */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,0.25)_0%,rgba(0,0,0,0.52)_40%,rgba(0,0,0,0.85)_100%)]"
+        />
+        {/* The deep pt on mobile is deliberate: the card is nearly viewport-wide
+            at 390px, so without it the photo is entirely behind the card and the
+            hero just reads black. This keeps a band of the glasses visible above
+            the card. Desktop has width to spare, so it goes back to even py. */}
+        <div className="relative max-w-5xl mx-auto px-4 sm:px-6 pt-32 pb-10 sm:py-16">
+          <header className="text-center mx-auto max-w-2xl rounded-lg border border-[#8A6A3A]/40 bg-black/35 backdrop-blur-[2px] px-5 py-6 sm:px-8 sm:py-8 shadow-[0_10px_40px_rgba(0,0,0,0.5)]">
+            <div className="text-[clamp(24px,4vw,36px)] font-bold tracking-[0.1em] text-[#E8B45A] leading-none [text-shadow:0_2px_0_#5A3A12]">
+              <span className="text-[#B08040]">d</span>ranker
+            </div>
+            <h1 className="mt-3 text-amber-200 font-bold text-xl sm:text-2xl leading-tight">
+              Whiskey rankings, built by the community
+            </h1>
+            <p className="mt-2 text-[#C9A96E] text-sm max-w-xl mx-auto">
+              Every rating is earned head-to-head — real drinkers voting bottle versus bottle, no critics and no paid scores.
+            </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-3">
+              <Link
+                to="/rank"
+                className="rounded-md bg-[#E8B45A] text-[#2A1B0C] border border-[#E8B45A] font-bold uppercase tracking-[0.25em] text-xs px-6 py-2.5 hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-amber-500 transition"
+              >
+                Start Ranking
+              </Link>
+              <Link
+                to="/leaderboard"
+                className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs uppercase tracking-widest px-6 py-2.5"
+              >
+                Rankings
+              </Link>
+              <Link
+                to="/trade"
+                className="rounded-md border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 focus:outline-none focus:ring-2 focus:ring-amber-500 text-xs uppercase tracking-widest px-6 py-2.5"
+              >
+                Trade Calculator
+              </Link>
+            </div>
+          </header>
+        </div>
+      </section>
+
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6">
 
         {/* Dashboard — TOP OF THE BOARD + the two rails as one equal-height
             row on desktop, stacked on mobile. Flex adapts to how many cards
@@ -197,6 +227,19 @@ export default function Landing() {
         {/* One-line footer inside the viewport — replaces the old banner strip
             and the separate AGED-IN-OAK footer. */}
         <footer className="mt-6 pt-4 border-t border-[#5A3A12]/60 text-center">
+          {/* Wax-seal mark. Decorative — the wordmark in the hero is what
+              names the site — so it's alt=""/aria-hidden. Header keeps the
+              wordmark as its only mark; the seal lives down here. */}
+          <img
+            src="/brand/seal.webp"
+            alt=""
+            aria-hidden="true"
+            width={96}
+            height={96}
+            loading="lazy"
+            decoding="async"
+            className="mx-auto mb-3 h-24 w-24"
+          />
           <Link
             to="/rank"
             className="text-[#C9A96E] italic text-xs hover:text-amber-200 focus:outline-none focus:ring-2 focus:ring-amber-500 rounded"
