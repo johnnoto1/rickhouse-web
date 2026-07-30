@@ -1861,12 +1861,16 @@ function Shell({ children, view, goView }) {
     <div style={S.page}>
       <style>{CSS}</style>
       <header style={S.header}>
-        <div style={S.brand}>
+        {/* Wordmark + tagline are ONE link, not two, so the lockup is a single
+            tab stop. Landing has its own copy of this markup (Tailwind), so
+            there's no self-link to worry about — Shell only wraps /rank and
+            /leaderboard. <Link> keeps it client-side; no reload. */}
+        <Link to="/" className="brandLink" style={S.brand} aria-label="dranker — home">
           <span style={S.brandMain}>
             <span style={S.brandD}>d</span>ranker
           </span>
           <span style={S.brandSub}>drink · rank · repeat</span>
-        </div>
+        </Link>
         <nav style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 14 }}>
           <button
             className={"tab" + (view === "rank" ? " tabOn" : "")}
@@ -1909,7 +1913,16 @@ const S = {
     flexDirection: "column",
   },
   header: { padding: "28px 20px 0", textAlign: "center" },
-  brand: { display: "flex", flexDirection: "column", alignItems: "center" },
+  // inline-flex, not flex: as a link this element is now a hit target, and a
+  // block-level one would span the full header width and swallow clicks in the
+  // empty space either side of the wordmark. Inline-flex shrinks it to the
+  // lockup; S.header's textAlign:center still centers it, so nothing moves.
+  // The color/decoration resets keep the anchor visually identical to the div
+  // it replaced — cursor:pointer is the only intended new affordance.
+  brand: {
+    display: "inline-flex", flexDirection: "column", alignItems: "center",
+    color: "inherit", textDecoration: "none", cursor: "pointer",
+  },
   brandMain: {
     fontSize: "clamp(34px, 7vw, 56px)", letterSpacing: "0.12em",
     fontWeight: 700, color: "#E8B45A", lineHeight: 1.05,
@@ -2139,7 +2152,7 @@ const CSS = `
 @media (hover: hover) { .typeChip:hover:not(:disabled) { border-color: #B08040; color: #E8B45A; } }
 .typeChip:disabled { opacity: .4; cursor: not-allowed; }
 .typeChipOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; }
-.tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible, .batchToggle:focus-visible, .typeChip:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
+.tab:focus-visible, .roleBtn:focus-visible, .pourBtn:focus-visible, .field:focus-visible, .sortHdr:focus-visible, .batchToggle:focus-visible, .typeChip:focus-visible, .brandLink:focus-visible { outline: 2px solid #E8B45A; outline-offset: 2px; }
 /* Table/Map segmented toggle in the panel head. Small-caps pills sharing a
    border so they read as one control; the active side takes the gold fill. */
 .segBtn { background: transparent; border: 1px solid #8A6A3A; color: #7A5A2E; padding: 4px 12px; font-family: Georgia, serif; font-size: 10px; letter-spacing: 0.18em; font-weight: 700; text-transform: uppercase; cursor: pointer; transition: all .15s; }
