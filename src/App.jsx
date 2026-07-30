@@ -2117,7 +2117,13 @@ const MEDAL_BRONZE = "#9C5A2C"; // cut / 3rd
 
 const CSS = `
 .tab { background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 8px 20px; font-family: Georgia, serif; font-size: 12px; letter-spacing: 0.25em; cursor: pointer; transition: all .15s; text-decoration: none; display: inline-block; }
-.tab:hover { border-color: #B08040; color: #E8B45A; }
+/* Same gold-on-gold trap the .typeChip rule below documents, and the same
+   fix. Two ways .tab hit it: on touch the :hover state sticks after a tap,
+   and .tab:hover (0,2,0) outranks .tabOn (0,1,0), so the active tab's
+   #E8B45A text landed on .tabOn's #E8B45A background; with a real mouse,
+   simply hovering the ALREADY-active tab did the same thing. The media
+   query handles the first, :not(.tabOn) the second. */
+@media (hover: hover) { .tab:hover:not(.tabOn) { border-color: #B08040; color: #E8B45A; } }
 .tabOn { background: #E8B45A; color: #2A1B0C; border-color: #E8B45A; font-weight: 700; }
 .batchToggle { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 1px solid #5A3A12; color: #C9A96E; padding: 7px 16px; font-family: Georgia, serif; font-size: 11px; letter-spacing: 0.2em; font-weight: 700; cursor: pointer; border-radius: 999px; transition: all .15s; }
 .batchToggle:hover:not(:disabled) { border-color: #B08040; color: #E8B45A; }
